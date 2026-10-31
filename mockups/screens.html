@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent 视觉稿 v0.1</title>
+<style>
+  :root{
+    --ink:#1B1C1E; --muted:#5F6368; --hint:#8A9099;
+    --line:#E3E5EA; --line-soft:#EDEFF3; --surface:#F7F8FA;
+    --accent:#1A73E8; --accent-soft:#E8F0FE;
+    --ok:#1E7B4D; --ok-soft:#E7F4EC;
+    --warn:#8A5A00; --warn-soft:#FDF3E0;
+    --bad:#B3261E; --bad-soft:#FDECEC;
+  }
+  *{box-sizing:border-box; -webkit-font-smoothing:antialiased}
+  html,body{margin:0}
+  body{
+    background:#F1F3F5; padding:32px; display:flex; flex-wrap:wrap; gap:28px;
+    font-family:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+    color:var(--ink); width:1353px; align-content:flex-start;
+  }
+  body.single{padding:0;background:#fff;width:411px}
+  .frame{margin:0}
+  body.single .cap{display:none}
+  .cap{font-size:13px;font-weight:600;color:#8A9099;letter-spacing:.04em;margin:0 0 10px 6px}
+  .phone{
+    position:relative;width:411px;height:891px;background:#fff;border-radius:34px;
+    overflow:hidden;display:flex;flex-direction:column;
+    box-shadow:0 0 0 1px #E1E4E8, 0 16px 40px rgba(15,23,42,.10);
+  }
+
+  /* 状态栏 */
+  .statusbar{height:44px;flex:none;position:relative;z-index:6;display:flex;align-items:center;justify-content:space-between;
+    padding:0 26px 0 28px;font-size:13.5px;font-weight:600;letter-spacing:.01em}
+  .sb-r{display:flex;align-items:center;gap:5px}
+  .sb-bat{width:22px;height:11px;border:1.4px solid var(--ink);border-radius:3px;position:relative}
+  .sb-bat::after{content:"";position:absolute;left:1.4px;top:1.4px;bottom:1.4px;width:13px;background:var(--ink);border-radius:1px}
+  .sb-bat::before{content:"";position:absolute;right:-3.4px;top:3px;width:2px;height:5px;background:var(--ink);border-radius:0 1px 1px 0}
+
+  /* 顶栏 */
+  .topbar{height:58px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px 0 6px}
+  .iconbtn{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;color:#3C4043}
+  .chip{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 11px;border-radius:999px;
+    font-size:13px;font-weight:600;white-space:nowrap}
+  .chip.model{border:1px solid var(--line);color:var(--ink)}
+  .chip.ws{background:#F1F3F6;color:#3C4043;font-weight:500}
+  .dot{width:6px;height:6px;border-radius:50%;background:#1E9E5A;flex:none}
+  .dot.amber{background:#E0A020}.dot.red{background:#D93B32}
+  .spacer{flex:1}
+
+  /* 消息流 */
+  .body{flex:1;min-height:0;overflow:hidden;padding:2px 16px 0}
+  .body.stack{display:flex;flex-direction:column;justify-content:flex-end;padding-bottom:6px}
+  .u-msg{align-self:flex-end;max-width:80%;background:#EDF1F9;border-radius:20px 20px 6px 20px;
+    padding:11px 15px;font-size:14.5px;line-height:1.55;margin-left:auto}
+  .ai-row{display:flex;gap:10px;margin-top:20px}
+  .avatar{width:26px;height:26px;flex:none;border-radius:50%;margin-top:1px;
+    background:linear-gradient(140deg,#4285F4,#9B72CB 55%,#D96570);display:grid;place-items:center;
+    color:#fff;font-size:12px;font-weight:700}
+  .ai-text{font-size:14.5px;line-height:1.62;padding-top:2px}
+
+  /* 工具卡片 */
+  .tcard{margin:12px 0 0 36px;border:1px solid var(--line);border-radius:15px;overflow:hidden;background:#fff}
+  .tc-head{display:flex;align-items:center;gap:9px;padding:9px 11px;background:#FAFBFC;border-bottom:1px solid var(--line-soft)}
+  .tc-ic{width:22px;height:22px;flex:none;border-radius:6px;background:var(--accent-soft);color:var(--accent);
+    display:grid;place-items:center;font-size:10.5px;font-weight:700}
+  .tc-name{font-size:12.5px;font-weight:600;font-family:"Cascadia Code",Consolas,monospace}
+  .tc-path{font-size:12px;color:var(--hint);font-family:"Cascadia Code",Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .badge{margin-left:auto;font-size:10.5px;font-weight:600;padding:2.5px 7px;border-radius:999px;white-space:nowrap}
+  .badge.ok{background:var(--ok-soft);color:var(--ok)}
+  .badge.warn{background:var(--warn-soft);color:var(--warn)}
+  .badge.bad{background:var(--bad-soft);color:var(--bad)}
+  .diff{font-family:"Cascadia Code",Consolas,monospace;font-size:12px;line-height:1.72;padding:7px 0}
+  .diff div{display:flex;padding:0 10px 0 0;white-space:pre}
+  .diff .ln{width:26px;flex:none;text-align:right;color:#B4BAC2;margin-right:9px;user-select:none}
+  .diff .add{background:#EAF6EF;color:#17603C}
+  .diff .del{background:#FCEEEE;color:#A3241B}
+  .diff .ctx{color:#5F6368}
+  .tc-foot{display:flex;align-items:center;gap:6px;padding:8px 11px;border-top:1px solid var(--line-soft);
+    font-size:11.5px;color:var(--hint)}
+  .tc-foot b{color:#3C4043;font-weight:600}
+
+  /* 变更摘要 */
+  .summary{margin:6px 0 0 36px;border:1px solid var(--line);border-radius:14px;background:#F7F9FC;
+    padding:11px 12px;display:flex;align-items:center;gap:9px}
+  .summary .txt{font-size:12.5px;line-height:1.5}
+  .summary .txt b{font-weight:600}
+  .plus{color:var(--ok);font-family:"Cascadia Code",Consolas,monospace;font-weight:600}
+  .minus{color:var(--bad);font-family:"Cascadia Code",Consolas,monospace;font-weight:600}
+  .btn-ghost{margin-left:auto;flex:none;border:1px solid #D5D9E0;background:#fff;border-radius:999px;
+    padding:6px 12px;font-size:12px;font-weight:600;color:#3C4043;display:inline-flex;align-items:center;gap:5px}
+
+  /* 输入区 */
+  .composer{flex:none;padding:6px 12px 14px}
+  .comp-box{display:flex;align-items:flex-end;gap:9px;border:1px solid #DADCE0;border-radius:26px;
+    padding:9px 10px 9px 10px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .comp-plus{width:30px;height:30px;flex:none;border-radius:50%;background:#F1F3F6;display:grid;place-items:center;color:#3C4043}
+  .comp-ph{flex:1;font-size:14.5px;color:#9AA0A6;padding:5px 0 4px}
+  .comp-send{width:32px;height:32px;flex:none;border-radius:50%;background:var(--accent);display:grid;place-items:center;color:#fff}
+  .comp-hint{display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 0 0;
+    font-size:11px;color:#A2A8B0}
+  .comp-hint span{display:inline-flex;align-items:center;gap:4px}
+  .sep{width:1px;height:9px;background:#DDE1E6}
+
+  /* 抽屉 */
+  .scrim{position:absolute;inset:0;background:rgba(24,28,34,.34);z-index:2}
+  .drawer{position:absolute;left:0;top:0;bottom:0;width:302px;background:#fff;z-index:3;
+    box-shadow:6px 0 26px rgba(15,23,42,.18);display:flex;flex-direction:column;padding:0 0 8px}
+  .dw-head{display:flex;align-items:center;justify-content:space-between;padding:52px 16px 10px}
+  .dw-title{font-size:19px;font-weight:600}
+  .search{margin:2px 14px 8px;height:38px;border-radius:999px;background:#F1F3F6;display:flex;
+    align-items:center;gap:8px;padding:0 13px;font-size:13.5px;color:#9AA0A6}
+  .grp{font-size:11px;font-weight:700;letter-spacing:.06em;color:#A2A8B0;padding:12px 20px 5px}
+  .item{padding:9px 12px;margin:0 8px;border-radius:12px;display:flex;flex-direction:column;gap:2px}
+  .item.sel{background:var(--accent-soft)}
+  .item .t{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item .m{font-size:11.5px;color:var(--hint)}
+  .dw-foot{margin-top:auto;border-top:1px solid var(--line-soft);padding:6px 8px 16px}
+  .dw-row{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:12px;font-size:13.5px}
+  .dw-row .r{margin-left:auto;font-size:11.5px;color:var(--hint)}
+
+  /* 弹层 */
+  .sheet{position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:24px 24px 0 0;
+    padding:10px 20px 24px;box-shadow:0 -8px 32px rgba(15,23,42,.16)}
+  .grab{width:34px;height:4px;border-radius:2px;background:#DCDFE4;margin:0 auto 14px}
+  .sheet h3{margin:0 0 4px;font-size:16.5px;font-weight:600}
+  .sheet .sub{font-size:12.5px;color:var(--hint);margin-bottom:14px}
+  .diffbox{border:1px solid var(--line);border-radius:13px;background:#FAFBFC;overflow:hidden}
+  .note{display:flex;gap:7px;align-items:flex-start;font-size:11.5px;color:var(--hint);margin:12px 0 16px;line-height:1.5}
+  .btn-primary{width:100%;height:46px;border-radius:23px;background:var(--accent);color:#fff;
+    font-size:14.5px;font-weight:600;display:grid;place-items:center;box-shadow:0 2px 8px rgba(26,115,232,.28)}
+  .btn-row{display:flex;gap:10px;margin-top:10px}
+  .btn-soft{flex:1;height:44px;border-radius:22px;border:1px solid #D5D9E0;background:#fff;
+    font-size:13.5px;font-weight:600;color:#3C4043;display:grid;place-items:center}
+  .btn-soft.danger{color:var(--bad);border-color:#EFD5D3}
+
+  /* 列表页 */
+  .page{flex:1;min-height:0;overflow:hidden;padding:0 16px}
+  .card{border:1px solid var(--line);border-radius:15px;padding:13px 14px;margin-bottom:10px}
+  .card .hd{display:flex;align-items:center;gap:8px}
+  .card .nm{font-size:14.5px;font-weight:600}
+  .card .id{font-size:11.5px;color:var(--hint);font-family:"Cascadia Code",Consolas,monospace;margin-top:3px}
+  .tags{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+  .tag{font-size:10.5px;padding:2.5px 7px;border-radius:6px;background:#F1F3F6;color:#5F6368;font-weight:500}
+  .tag.tool{background:var(--accent-soft);color:#1558B0}
+  .banner{display:flex;gap:9px;align-items:flex-start;background:var(--warn-soft);border:1px solid #F3E2C4;
+    border-radius:13px;padding:11px 12px;margin-bottom:12px;font-size:11.5px;line-height:1.55;color:#6B4A0B}
+  .banner b{font-weight:600}
+
+  /* 表单 */
+  .field{margin-bottom:15px}
+  .field label{display:block;font-size:12px;font-weight:600;color:#5F6368;margin-bottom:6px}
+  .input{height:46px;border:1px solid #DADCE0;border-radius:12px;display:flex;align-items:center;
+    padding:0 13px;font-size:13.5px;gap:8px}
+  .input.focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(26,115,232,.12)}
+  .input .val{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .input .val.ph{color:#B0B5BC}
+  .input .mono{font-family:"Cascadia Code",Consolas,monospace;font-size:12.5px}
+  .input .right{color:#9AA0A6;font-size:11.5px;display:flex;align-items:center;gap:4px;flex:none}
+  .togglerow{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--line-soft)}
+  .togglerow .lbl{font-size:13.5px;font-weight:500}
+  .togglerow .dsc{font-size:11px;color:var(--hint);margin-top:1px}
+  .sw{width:40px;height:24px;border-radius:12px;background:#D5D9E0;position:relative;flex:none;margin-left:auto}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;
+    box-shadow:0 1px 3px rgba(0,0,0,.2)}
+  .sw.on{background:var(--accent)}
+  .sw.on::after{left:18px}
+
+  /* 事务记录 */
+  .wscard{border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:16px;background:#FBFCFD}
+  .wscard .row1{display:flex;align-items:center;gap:9px}
+  .wscard .nm{font-size:15px;font-weight:600;font-family:"Cascadia Code",Consolas,monospace}
+  .meta{font-size:11.5px;color:var(--hint);margin-top:6px;line-height:1.6}
+  .sect{font-size:11px;font-weight:700;letter-spacing:.06em;color:#A2A8B0;margin:4px 0 9px}
+  .txn{border:1px solid var(--line);border-radius:14px;padding:11px 12px;margin-bottom:9px}
+  .txn .top{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .txn .time{font-size:11.5px;color:var(--hint);font-variant-numeric:tabular-nums}
+  .txn .desc{font-size:13px;line-height:1.5}
+  .txn .desc .path{font-family:"Cascadia Code",Consolas,monospace;font-size:12px}
+  .txn .btm{display:flex;align-items:center;margin-top:8px}
+  .txn.cant{background:#FCFCFD;border-color:#EEEFF2}
+  .txn.cant .desc{color:#7A8088}
+  .fnote{font-size:11px;color:#A2A8B0;text-align:center;padding:6px 0 4px;line-height:1.6}
+</style>
+</head>
+<body>
+
+<!-- ══════════ 01 主对话 ══════════ -->
+<div class="frame" data-n="1">
+  <div class="cap">01 · 主对话（工具调用 + diff + 变更摘要）</div>
+  <div class="phone">
+    <div class="statusbar"><span>13:58</span><div class="sb-r">
+      <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx=".8"/><rect x="4.3" y="5.6" width="3" height="6.4" rx=".8"/><rect x="8.6" y="3.2" width="3" height="8.8" rx=".8"/><rect x="12.9" y="0" width="3" height="12" rx=".8" opacity=".35"/></svg>
+      <svg width="15" height="12" viewBox="0 0 15 12" fill="currentColor"><path d="M7.5 10.6 5.2 8.3a3.3 3.3 0 0 1 4.6 0l-2.3 2.3Zm0-4.2a6.1 6.1 0 0 0-4.3 1.8L1.8 6.8a8 8 0 0 1 11.4 0l-1.4 1.4a6.1 6.1 0 0 0-4.3-1.8Zm0-4a9.9 9.9 0 0 0-7 2.9L.1 3.9a11.8 11.8 0 0 1 14.8 0l-1.4 1.4a9.9 9.9 0 0 0-6-2.9Z"/></svg>
+      <div class="sb-bat"></div></div>
+    </div>
+
+    <div class="topbar">
+      <div class="iconbtn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M3.5 6.5h17M3.5 12h17M3.5 17.5h17"/></svg></div>
+      <div class="chip model"><span class="dot"></span>deepseek-v3<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8A9099" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="spacer"></div>
+      <div class="chip ws"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="1.9" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5Z"/></svg>web/<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8A9099" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></div>
+    </div>
+
+    <div class="body">
+      <div class="u-msg">把 notes.md 里的 TODO 改成 DONE，顺手把遗留的 FIXME 汇总到文件末尾</div>
+
+      <div class="ai-row">
+        <div class="avatar">✦</div>
+        <div class="ai-text">先读一下这个文件。</div>
+      </div>
+
+      <div class="tcard">
+        <div class="tc-head">
+          <div class="tc-ic">&lt;/&gt;</div>
+          <div style="min-width:0"><div class="tc-name">replace_in_file</div></div>
+          <div class="tc-path">notes.md</div>
+          <div class="badge ok">已应用</div>
+        </div>
+        <div class="diff">
+          <div class="ctx"><span class="ln">12</span>## 待办</div>
+          <div class="del"><span class="ln">13</span>- TODO 接入设置页的模型切换</div>
+          <div class="add"><span class="ln">13</span>+ DONE 接入设置页的模型切换</div>
+          <div class="ctx"><span class="ln">14</span>- TODO 补 workspace 索引失效逻辑</div>
+          <div class="add"><span class="ln">14</span>+ DONE 补 workspace 索引失效逻辑</div>
+        </div>
+        <div class="tc-foot"><b>3 处替换</b> · 48ms · 备份已就绪<span class="spacer"></span>完整 diff ›</div>
+      </div>
+
+      <div class="ai-row">
+        <div class="avatar">✦</div>
+        <div class="ai-text">改好了。另外发现 4 处 FIXME，已按出现顺序汇总到文件末尾的「遗留问题」小节。</div>
+      </div>
+
+      <div class="summary">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/></svg>
+        <div class="txt">本次变更 <b>1 个文件</b>　<span class="plus">+9</span> <span class="minus">−3</span></div>
+        <button class="btn-ghost"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M3.5 13a9 9 0 1 0 2-9.5L3 7"/></svg>撤销</button>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="comp-box">
+        <div class="comp-plus"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+        <div class="comp-ph">问点什么，或让它改文件</div>
+        <div class="comp-send"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></div>
+      </div>
+      <div class="comp-hint">
+        <span>自主：单轮工具</span><div class="sep"></div><span>审批：标准</span><div class="sep"></div><span>已用 12.4k tokens</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 02 会话抽屉 ══════════ -->
+<div class="frame" data-n="2">
+  <div class="cap">02 · 会话抽屉（历史分组 + 搜索）</div>
+  <div class="phone">
+    <div class="statusbar"><span>13:58</span><div class="sb-r"><div class="sb-bat"></div></div></div>
+    <div class="body" style="padding-top:10px;opacity:.55">
+      <div class="u-msg">把 notes.md 里的 TODO 改成 DONE</div>
+      <div class="ai-row"><div class="avatar">✦</div><div class="ai-text">先读一下这个文件。</div></div>
+    </div>
+    <div class="scrim"></div>
+    <div class="drawer">
+      <div class="dw-head">
+        <div class="dw-title">会话</div>
+        <div class="iconbtn" style="color:#3C4043"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+      </div>
+      <div class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>搜索会话</div>
+      <div class="grp">今天</div>
+      <div class="item sel"><div class="t">整理 notes.md 的待办</div><div class="m">web/ · 6 轮</div></div>
+      <div class="item"><div class="t">把这批截图按内容重命名</div><div class="m">Pictures/截图 · 12 文件</div></div>
+      <div class="grp">近 7 天</div>
+      <div class="item"><div class="t">找出引用旧域名的文件</div><div class="m">web/ · 18 轮</div></div>
+      <div class="item"><div class="t">下载目录去重</div><div class="m">Download/ · 已撤销</div></div>
+      <div class="item"><div class="t">给简历 PDF 换个文件名</div><div class="m">Documents/求职 · 2 轮</div></div>
+      <div class="grp">更早</div>
+      <div class="item"><div class="t">批量改下载目录的日期前缀</div><div class="m">Download/ · 9 轮</div></div>
+      <div class="item"><div class="t">这堆日志里哪条是报错</div><div class="m">logs/ · 4 轮</div></div>
+      <div class="dw-foot">
+        <div class="dw-row"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg>模型<span class="r">4 个可用</span></div>
+        <div class="dw-row"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5Z"/></svg>工作区<span class="r">3 个</span></div>
+        <div class="dw-row"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="1.8" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V20a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H4a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H10a1.6 1.6 0 0 0 1-1.5V4a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V10a1.6 1.6 0 0 0 1.5 1H20a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/></svg>设置</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 03 审批弹层 ══════════ -->
+<div class="frame" data-n="3">
+  <div class="cap">03 · 写操作审批（diff + 三档动作）</div>
+  <div class="phone">
+    <div class="statusbar"><span>13:58</span><div class="sb-r"><div class="sb-bat"></div></div></div>
+    <div class="topbar">
+      <div class="iconbtn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M3.5 6.5h17M3.5 12h17M3.5 17.5h17"/></svg></div>
+      <div class="chip model"><span class="dot"></span>deepseek-v3<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8A9099" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></div>
+      <div class="spacer"></div>
+      <div class="chip ws"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="1.9" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5Z"/></svg>web/</div>
+    </div>
+    <div class="body" style="opacity:.5">
+      <div class="u-msg">把 notes.md 里的 TODO 改成 DONE，顺手把遗留的 FIXME 汇总到文件末尾</div>
+      <div class="ai-row"><div class="avatar">✦</div><div class="ai-text">先读一下这个文件。</div></div>
+      <div class="tcard">
+        <div class="tc-head"><div class="tc-ic">&lt;/&gt;</div><div class="tc-name">read_file</div><div class="tc-path">notes.md</div><div class="badge ok">已完成</div></div>
+        <div class="tc-foot"><b>2.1 KB</b>· 已记录指纹 mtime 13:56</div>
+      </div>
+      <div class="ai-row"><div class="avatar">✦</div><div class="ai-text">读到 3 处 TODO、4 处 FIXME。准备修改。</div></div>
+    </div>
+    <div class="scrim"></div>
+    <div class="sheet">
+      <div class="grab"></div>
+      <h3>即将修改 notes.md</h3>
+      <div class="sub">3 处替换 · 原文件 2.1 KB · 备份已就绪</div>
+      <div class="diffbox">
+        <div class="diff" style="padding:9px 0">
+          <div class="ctx"><span class="ln">12</span>## 待办</div>
+          <div class="del"><span class="ln">13</span>- TODO 接入设置页的模型切换</div>
+          <div class="add"><span class="ln">13</span>+ DONE 接入设置页的模型切换</div>
+          <div class="del"><span class="ln">14</span>- TODO 补 workspace 索引失效逻辑</div>
+          <div class="add"><span class="ln">14</span>+ DONE 补 workspace 索引失效逻辑</div>
+          <div class="del"><span class="ln">16</span>- TODO 处理只读目录</div>
+          <div class="add"><span class="ln">16</span>+ DONE 处理只读目录</div>
+        </div>
+      </div>
+      <div class="note">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8A9099" stroke-width="2" stroke-linecap="round" style="margin-top:2px;flex:none"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01"/></svg>
+        <div>该目录已确认为可写。执行后可在「撤销与记录」内整组还原，快照保留 7 天。</div>
+      </div>
+      <div class="btn-primary">允许一次</div>
+      <div class="btn-row">
+        <div class="btn-soft">本会话允许同类</div>
+        <div class="btn-soft danger">拒绝</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 04 模型管理 ══════════ -->
+<div class="frame" data-n="4">
+  <div class="cap">04 · 模型管理（含连接失败与局域网提示）</div>
+  <div class="phone">
+    <div class="statusbar"><span>13:58</span><div class="sb-r"><div class="sb-bat"></div></div></div>
+    <div class="topbar">
+      <div class="iconbtn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg></div>
+      <div style="font-size:17px;font-weight:600">模型</div>
+      <div class="spacer"></div>
+      <div class="iconbtn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></div>
+    </div>
+    <div class="page">
+      <div class="banner">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A5A00" stroke-width="2" stroke-linecap="round" style="margin-top:1.5px;flex:none"><path d="M12 3 2.5 20h19Z"/><path d="M12 9v5M12 17h.01"/></svg>
+        <div>Android 16 起访问局域网设备需要<b>「附近设备」权限</b>。接本机 Ollama / LM Studio 前请先授权。</div>
+      </div>
+
+      <div class="card">
+        <div class="hd"><div class="nm">DeepSeek V3</div><div class="badge ok" style="margin-left:auto">可用</div></div>
+        <div class="id">api.deepseek.com · deepseek-chat</div>
+        <div class="tags"><span class="tag tool">原生工具调用</span><span class="tag">128k</span><span class="tag">默认</span></div>
+      </div>
+
+      <div class="card">
+        <div class="hd"><div class="nm">本机 Ollama</div><div class="badge warn" style="margin-left:auto">需授权</div></div>
+        <div class="id">192.168.1.12:11434/v1 · qwen3:14b</div>
+        <div class="tags"><span class="tag tool">原生工具调用</span><span class="tag">局域网</span></div>
+      </div>
+
+      <div class="card">
+        <div class="hd"><div class="nm">Gemini 2.5 Flash</div><div class="badge bad" style="margin-left:auto">401</div></div>
+        <div class="id">generativelanguage.googleapis.com/v1beta</div>
+        <div class="id" style="margin-top:6px;font-family:inherit;color:#B3261E">Key 无效或已过期（HTTP 401）</div>
+        <div class="tags"><span class="tag">修改 Key</span><span class="tag">重新测试</span></div>
+      </div>
+
+      <div class="card" style="border-style:dashed;background:#FCFCFD">
+        <div class="hd"><div class="nm" style="color:#5F6368;font-size:13.5px">+ 添加模型</div></div>
+        <div class="id">OpenAI · DeepSeek · Kimi · 通义 · OpenRouter · Ollama · 自定义</div>
+      </div>
+      <div class="fnote">长按可拖动排序 · 首个为默认模型</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 05 模型编辑 ══════════ -->
+<div class="frame" data-n="5">
+  <div class="cap">05 · 模型编辑（自备端点 + 能力标签）</div>
+  <div class="phone">
+    <div class="statusbar"><span>13:58</span><div class="sb-r"><div class="sb-bat"></div></div></div>
+    <div class="topbar">
+      <div class="iconbtn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg></div>
+      <div style="font-size:17px;font-weight:600">编辑模型</div>
+    </div>
+    <div class="page" style="padding-top:6px">
+      <div class="field"><label>显示名</label><div class="input"><div class="val">DeepSeek V3</div></div></div>
+      <div class="field"><label>Base URL</label><div class="input focus"><div class="val mono">https://api.deepseek.com/v1</div><div class="right">已规范化</div></div></div>
+      <div class="field"><label>API Key</label><div class="input"><div class="val mono">••••••••••3f7a</div><div class="right">Keystore</div></div></div>
+      <div class="field"><label>模型 ID</label><div class="input"><div class="val mono">deepseek-chat</div><div class="right">拉取到 12 个 ›</div></div></div>
+
+      <div style="margin:18px 0 6px;font-size:12px;font-weight:700;letter-spacing:.05em;color:#A2A8B0">能力</div>
+      <div class="togglerow"><div><div class="lbl">原生工具调用</div><div class="dsc">关掉则降级为文本协议，文件操作会不稳</div></div><div class="sw on"></div></div>
+      <div class="togglerow"><div><div class="lbl">视觉输入</div><div class="dsc">可分析图片内容</div></div><div class="sw"></div></div>
+      <div class="togglerow" style="border:none"><div><div class="lbl">上下文窗口</div><div class="dsc">超过 70% 自动摘要压缩</div></div><div style="margin-left:auto;font-size:13px;font-weight:600;color:#5F6368;font-variant-numeric:tabular-nums">128k</div></div>
+
+      <div class="btn-primary" style="margin-top:18px">保存并测试连接</div>
+      <div class="fnote" style="margin-top:12px">能力标签由你确认，不做自动探测 · 单价可留空，仅影响费用估算</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 06 撤销与记录 ══════════ -->
+<div class="frame" data-n="6">
+  <div class="cap">06 · 工作区 + 撤销记录（含不可撤销标注）</div>
+  <div class="phone">
+    <div class="statusbar"><span>13:58</span><div class="sb-r"><div class="sb-bat"></div></div></div>
+    <div class="topbar">
+      <div class="iconbtn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg></div>
+      <div style="font-size:17px;font-weight:600">撤销与记录</div>
+    </div>
+    <div class="page" style="padding-top:6px">
+      <div class="wscard">
+        <div class="row1">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5F6368" stroke-width="1.9" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h7A1.5 1.5 0 0 1 19 10v7.5A1.5 1.5 0 0 1 17.5 19h-13A1.5 1.5 0 0 1 3 17.5Z"/></svg>
+          <div class="nm">web/</div>
+          <div class="badge ok" style="margin-left:auto">可写</div>
+        </div>
+        <div class="meta">Storage/emulated/0/projects/web<br>1,284 个文件 · 已索引 8 分钟前</div>
+        <div style="display:flex;gap:8px;margin-top:11px">
+          <div class="btn-soft" style="height:38px;font-size:12.5px">重建索引</div>
+          <div class="btn-soft" style="height:38px;font-size:12.5px">更换目录</div>
+        </div>
+      </div>
+
+      <div class="sect" style="display:flex;align-items:center">今天<span style="margin-left:auto;font-weight:600;letter-spacing:0;font-size:11.5px;color:#5F6368">回收站 12 ›</span></div>
+
+      <div class="txn">
+        <div class="top"><div class="time">14:02</div><div class="badge ok" style="margin-left:auto">可撤销</div></div>
+        <div class="desc" style="display:flex;align-items:flex-end;gap:10px"><div style="flex:1">会话「整理 notes.md 的待办」<br><span class="path">notes.md</span> <span class="plus">+9</span> <span class="minus">−3</span></div><button class="btn-ghost" style="flex:none;padding:5px 11px;font-size:11.5px">撤销整组</button></div>
+      </div>
+
+      <div class="txn">
+        <div class="top"><div class="time">13:41</div><div class="badge ok" style="margin-left:auto">可撤销</div></div>
+        <div class="desc" style="display:flex;align-items:flex-end;gap:10px"><div style="flex:1">会话「下载目录去重」<br>12 个文件移入回收站</div><button class="btn-ghost" style="flex:none;padding:5px 11px;font-size:11.5px">撤销整组</button></div>
+      </div>
+
+      <div class="txn cant">
+        <div class="top"><div class="time">11:20</div><div class="badge warn" style="margin-left:auto">不可撤销</div></div>
+        <div class="desc">移动 <span class="path">video.mp4</span><br><span style="font-size:11.5px;color:#A2A8B0">文件 1.2 GB，超过 2 MB 备份阈值，未建快照</span></div>
+      </div>
+
+      <div class="fnote">快照保留 7 天或累计 200 MB，超限先清理最旧</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const only = new URLSearchParams(location.search).get('only');
+  if (only){
+    document.body.classList.add('single');
+    document.querySelectorAll('.frame').forEach(f => { if (f.dataset.n !== only) f.remove(); });
+  }
+</script>
+</body>
+</html>

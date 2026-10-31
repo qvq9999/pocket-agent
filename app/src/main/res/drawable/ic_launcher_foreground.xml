@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标前景：星形 + 文件卡。
+     108dp 画布，内容整体缩放到中心 72dp 安全区（translate 18 + scale 72/512）。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:translateX="18"
+        android:translateY="18"
+        android:scaleX="0.140625"
+        android:scaleY="0.140625">
+
+        <!-- 文件卡：262,262 起，182×182，圆角 44 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M306,262 L400,262 A44,44 0 0 1 444,306 L444,400 A44,44 0 0 1 400,444 L306,444 A44,44 0 0 1 262,400 L262,306 A44,44 0 0 1 306,262 Z" />
+
+        <!-- 卡内三条横线（示意待办/文本） -->
+        <path
+            android:pathData="M308,326 L398,326 M308,358 L366,358 M308,390 L384,390"
+            android:strokeColor="#1550C0"
+            android:strokeWidth="15"
+            android:strokeLineCap="round" />
+
+        <!-- 四角星：压住文件卡左上角，表示 AI 在操作文件 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M196,66 Q208,186 328,198 Q208,210 196,330 Q184,210 64,198 Q184,186 196,66 Z" />
+    </group>
+</vector>

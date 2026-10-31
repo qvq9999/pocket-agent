@@ -1,0 +1,31 @@
+# ── 构建产物 ──
+.gradle/
+.kotlin/
+build/
+app/build/
+captures/
+.cxx/
+*.hprof
+
+# ── 本机配置（每个开发机的 SDK 路径 / 签名密码都不一样，不该进库）──
+local.properties
+keystore.properties
+*.jks
+*.keystore
+
+# ── 安装包 ──
+*.apk
+*.aab
+*.ap_
+*.apk.idsig
+
+# ── IDE / 系统 ──
+.idea/
+*.iml
+*.class
+.DS_Store
+Thumbs.db
+
+# ── WorkBuddy 工作区数据（会话记忆与日志，不是源码）──
+# 想把项目记忆也纳入版本库，删掉下面这一行即可
+.workbuddy/

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  相机临时目录白名单（FileProvider 只暴露这一个目录）。
+
+  属性必须写成**无命名空间**的 name / path，不能加 android: 前缀。
+  依据：androidx.core 1.19.x 的 FileProvider 用 getAttributeValue(null, "name") 取值，
+  它的字节码里根本没有 "schemas.android.com/apk/res/android" 这个常量。
+  写成 android:name 它读到 null，addRoot 抛 IllegalArgumentException("Name must not be empty")。
+-->
+<paths>
+    <cache-path name="camera" path="camera/" />
+</paths>

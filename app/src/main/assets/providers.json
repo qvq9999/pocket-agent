@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "updated": "2026-10-30",
+  "providers": [
+    {
+      "id": "xiaomi-mimo",
+      "name": "小米 MiMo",
+      "icon": "xiaomi",
+      "fallbackText": "Mi",
+      "fallbackColor": "#FF6900",
+      "region": "cn",
+      "baseUrl": "https://api.xiaomimimo.com/v1",
+      "modelsPath": "/models",
+      "docsUrl": "https://platform.xiaomimimo.com",
+      "requiresEdit": false,
+      "altEndpoints": [
+        {
+          "label": "Token Plan（国内订阅）",
+          "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+          "keyHint": "tp-",
+          "note": "订阅 key 以 tp- 或 ttp- 开头，必须用这个端点，否则 401"
+        }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "icon": "deepseek",
+      "fallbackText": "DS",
+      "fallbackColor": "#4D6BFE",
+      "region": "cn",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "modelsPath": "/models",
+      "docsUrl": "https://platform.deepseek.com",
+      "requiresEdit": false,
+      "altEndpoints": []
+    },
+    {
+      "id": "agnes",
+      "name": "Agnes 国内站",
+      "icon": "agnes",
+      "fallbackText": "Ag",
+      "fallbackColor": "#6B4FBB",
+      "region": "cn",
+      "baseUrl": "https://api.agnes-ai.cn/v1",
+      "modelsPath": "/models",
+      "docsUrl": "https://agnes-ai.cn",
+      "requiresEdit": false,
+      "altEndpoints": [
+        {
+          "label": "国际站",
+          "baseUrl": "https://apihub.agnes-ai.com/v1",
+          "keyHint": "",
+          "note": "海外网络访问用这个端点"
+        }
+      ]
+    },
+    {
+      "id": "kimi",
+      "name": "月之暗面 Kimi",
+      "icon": "kimi",
+      "fallbackText": "K",
+      "fallbackColor": "#16191D",
+      "region": "cn",
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "modelsPath": "/models",
+      "docsUrl": "https://platform.moonshot.cn",
+      "requiresEdit": false,
+      "altEndpoints": []
+    },
+    {
+      "id": "zhipu",
+      "name": "智谱 GLM",
+      "icon": "zhipu",
+      "fallbackText": "Z",
+      "fallbackColor": "#3859FF",
+      "region": "cn",
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      "modelsPath": "/models",
+      "docsUrl": "https://open.bigmodel.cn",
+      "requiresEdit": false,
+      "altEndpoints": []
+    },
+    {
+      "id": "qwen",
+      "name": "阿里通义",
+      "icon": "qwen",
+      "fallbackText": "QW",
+      "fallbackColor": "#615CED",
+      "region": "cn",
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "modelsPath": "/models",
+      "docsUrl": "https://bailian.console.aliyun.com",
+      "requiresEdit": false,
+      "altEndpoints": []
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "icon": "openai",
+      "fallbackText": "AI",
+      "fallbackColor": "#0F0F0F",
+      "region": "intl",
+      "baseUrl": "https://api.openai.com/v1",
+      "modelsPath": "/models",
+      "docsUrl": "https://platform.openai.com",
+      "requiresEdit": false,
+      "altEndpoints": []
+    },
+    {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "icon": "gemini",
+      "fallbackText": "Ge",
+      "fallbackColor": "#4285F4",
+      "region": "intl",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "modelsPath": "/models",
+      "docsUrl": "https://ai.google.dev",
+      "requiresEdit": false,
+      "altEndpoints": []
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "icon": "openrouter",
+      "fallbackText": "OR",
+      "fallbackColor": "#16191D",
+      "region": "intl",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "modelsPath": "/models",
+      "docsUrl": "https://openrouter.ai",
+      "requiresEdit": false,
+      "altEndpoints": []
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "icon": "ollama",
+      "fallbackText": "Ol",
+      "fallbackColor": "#16191D",
+      "region": "local",
+      "baseUrl": "http://192.168.1.100:11434/v1",
+      "modelsPath": "/models",
+      "docsUrl": "https://ollama.com",
+      "requiresEdit": true,
+      "altEndpoints": []
+    },
+    {
+      "id": "lmstudio",
+      "name": "LM Studio",
+      "icon": "lmstudio",
+      "fallbackText": "LM",
+      "fallbackColor": "#4A5568",
+      "region": "local",
+      "baseUrl": "http://192.168.1.100:1234/v1",
+      "modelsPath": "/models",
+      "docsUrl": "https://lmstudio.ai",
+      "requiresEdit": true,
+      "altEndpoints": []
+    }
+  ]
+}
