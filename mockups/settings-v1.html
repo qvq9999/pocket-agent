@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  :root{
+    --ink:#1B1C1E; --muted:#5F6368; --hint:#8A9099; --faint:#A2A8B0;
+    --line:#E3E5EA; --lineSoft:#EDEFF3; --surface:#F7F8FA; --surfaceAlt:#F1F3F6;
+    --card:#FFFFFF; --accent:#1A73E8; --accentSoft:#E8F0FE; --accentInk:#12508F;
+    --ok:#1E7B4D; --okSoft:#E7F4EC; --warn:#8A5A00; --warnSoft:#FDF3E0; --bad:#B3261E; --media:#6B3FA0;
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+  body{margin:0;background:#E9EBEF;font-family:"Segoe UI","PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;color:var(--ink)}
+  .wrap{display:flex;flex-wrap:wrap;gap:20px;padding:18px;align-items:flex-start;max-width:880px}
+  .cap{font-size:12px;font-weight:600;color:#3C4043;margin:0 0 8px 3px}
+  .cap span{font-weight:400;color:#80868B}
+  .phone{width:393px;background:#fff;border-radius:20px;overflow:hidden;border:1px solid #DDE0E5;box-shadow:0 6px 20px rgba(0,0,0,.08)}
+  .bar{height:52px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--lineSoft)}
+  .bar .t{font-size:16px;font-weight:700}
+  .body{background:#fff;padding:6px 16px 18px}
+
+  .sec{font-size:11px;font-weight:700;color:var(--faint);letter-spacing:.4px;padding:12px 2px 6px}
+  .card{border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  .row{display:flex;align-items:center;gap:11px;padding:10px 14px;min-height:54px}
+  .row.close{min-height:46px}
+  .ico{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex:none;font-size:14px}
+  .mid{flex:1;min-width:0}
+  .t1{font-size:14px;color:var(--ink);line-height:19px}
+  .t2{font-size:10.5px;color:var(--hint);line-height:14px;margin-top:1px}
+  .val{font-size:11.5px;color:var(--hint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:132px}
+  .chev{color:var(--faint);font-size:13px;flex:none}
+  .hr{height:1px;background:var(--lineSoft);margin-left:55px}
+  .hr.full{margin-left:0}
+
+  .sw{width:38px;height:22px;border-radius:50px;background:var(--accent);flex:none;position:relative}
+  .sw i{position:absolute;right:2px;top:2px;width:18px;height:18px;border-radius:50%;background:#fff;display:block}
+  .sw.off{background:var(--line)}
+  .sw.off i{left:2px;right:auto}
+
+  /* 分段控件 */
+  .seg{display:flex;background:var(--surfaceAlt);border-radius:9px;padding:2px;flex:none}
+  .seg span{font-size:10.5px;font-weight:600;color:var(--muted);padding:4px 7px;border-radius:7px;white-space:nowrap}
+  .seg span.on{background:#fff;color:var(--accentInk);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+
+  .pill{font-size:10px;font-weight:700;padding:2px 7px;border-radius:50px;flex:none}
+  .pill.ok{background:var(--okSoft);color:var(--ok)}
+  .pill.warn{background:var(--warnSoft);color:var(--warn)}
+
+  /* 状态卡 */
+  .hero{border:1px solid var(--line);border-radius:16px;padding:13px 14px;display:flex;gap:12px;align-items:center}
+  .hero .big{font-size:14.5px;font-weight:700}
+  .hero .sm{font-size:10.5px;color:var(--hint);margin-top:3px}
+  .hero .right{margin-left:auto;text-align:right}
+  .hero .num{font-size:13px;font-weight:700;color:var(--accentInk)}
+  .hero .lbl{font-size:10px;color:var(--faint)}
+
+  /* 规则卡 */
+  .rules{width:100%;max-width:846px;background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+  .rules h4{margin:0 0 8px;font-size:12px;color:#1B1C1E}
+  .rgrid{display:flex;flex-wrap:wrap;gap:8px}
+  .r{flex:1;min-width:150px;border:1px solid var(--line);border-radius:10px;padding:9px 10px}
+  .r .lab{font-size:10.5px;color:var(--hint);margin-top:6px;line-height:14px}
+  .demo{height:24px;display:flex;align-items:center}
+
+  .note{width:100%;max-width:846px;font-size:11.5px;line-height:19px;color:#5F6368;background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+  .note b{color:#1B1C1E}
+  .note ul{padding-left:16px;margin:6px 0}
+  .note li{margin-bottom:4px}
+  .cols{display:flex;gap:18px;flex-wrap:wrap}
+  .cols>div{flex:1;min-width:250px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ① 现状 -->
+  <div>
+    <p class="cap">① 现状 <span>· 同样的行长着五种不同的行为</span></p>
+    <div class="phone">
+      <div class="bar"><span style="font-size:18px;color:#1B1C1E">‹</span><span class="t">设置</span></div>
+      <div class="body">
+        <div class="sec">常用</div>
+        <div class="card">
+          <div class="row"><div class="ico" style="background:#EEF3FD">◐</div><div class="mid"><div class="t1">主题</div></div><div class="val">跟随系统</div><div class="chev">›</div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#EEF3FD">ⓘ</div><div class="mid"><div class="t1">用量账单</div></div><div class="val">今日 3.00M tok</div><div class="chev">›</div></div>
+        </div>
+
+        <div class="sec">功能</div>
+        <div class="card">
+          <div class="row"><div class="ico" style="background:#EEF3FD">◇</div><div class="mid"><div class="t1">模型</div></div><div class="val">3 个</div><div class="chev">›</div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#E9F4EF">⇄</div><div class="mid"><div class="t1">扩展</div></div><div class="val">Linux 环境 · 已装</div><div class="chev">›</div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#EEF3FD">✦</div><div class="mid"><div class="t1">Skill 管理</div></div><div class="val">3 个 · 3 启用</div><div class="chev">›</div></div>
+        </div>
+
+        <div class="sec">对话</div>
+        <div class="card">
+          <div class="row"><div class="ico" style="background:#FDF3E0">◈</div><div class="mid"><div class="t1">默认访问权限</div></div><div class="val">全部允许</div><div class="chev">›</div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#F4EEFB">☰</div><div class="mid"><div class="t1">永久允许的工具</div></div><div class="val">1 个</div><div class="chev">⌄</div></div>
+        </div>
+
+        <div class="sec">联网搜索</div>
+        <div class="card">
+          <div class="row"><div class="ico" style="background:#EEF3FD">⌕</div><div class="mid"><div class="t1" style="font-size:14px">联网搜索</div><div class="t2">模型可自行决定要不要搜 · 已用 13/1500</div></div><div class="sw"><i></i></div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#F4EEFB">🛡</div><div class="mid"><div class="t1">AnySearch Key</div></div><div class="val">as_sk_…36c2</div><div class="chev">›</div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#F1F3F6">ⓘ</div><div class="mid"><div class="t1">获取 Key</div></div><div class="val">anysearch.com</div><div class="chev">›</div></div>
+        </div>
+
+        <div class="sec">关于</div>
+        <div class="card">
+          <div class="row"><div class="ico" style="background:#EEF3FD">▤</div><div class="mid"><div class="t1">使用说明</div></div><div class="chev">›</div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#EEF3FD">✦</div><div class="mid"><div class="t1">使用引导</div></div><div class="val">已完成</div><div class="chev">›</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ② 方案 -->
+  <div>
+    <p class="cap">② 方案 <span>· 右侧控件即行为；两个弹窗改成内联分段</span></p>
+    <div class="phone">
+      <div class="bar"><span style="font-size:18px;color:#1B1C1E">‹</span><span class="t">设置</span></div>
+      <div class="body">
+        <div class="sec">当前配置</div>
+        <div class="hero">
+          <div class="ico" style="background:#EEF3FD;width:34px;height:34px">◇</div>
+          <div>
+            <div class="big">mimo-v2.6-flash</div>
+            <div class="sm">上下文 131,072 · 权限 允许</div>
+          </div>
+          <div class="right"><div class="num">3.00M</div><div class="lbl">今日 tok</div></div>
+        </div>
+
+        <div class="sec">对话</div>
+        <div class="card">
+          <div class="row"><div class="ico" style="background:#FDF3E0">◈</div><div class="mid"><div class="t1">默认访问权限</div><div class="t2">新会话的起始档位</div></div><div class="seg"><span>只读</span><span>需确认</span><span class="on">允许</span></div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#F4EEFB">☰</div><div class="mid"><div class="t1">永久允许的工具</div><div class="t2">1 个 · 逐条撤销</div></div><div class="chev">›</div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#EEF3FD">⌕</div><div class="mid"><div class="t1">联网搜索</div><div class="t2">今日 13/1500 次</div></div><div class="sw"><i></i></div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#F4EEFB">🛡</div><div class="mid"><div class="t1">AnySearch Key</div><div class="t2">已设置 · 额度提到 1500 次/天</div></div><div class="chev">›</div></div>
+        </div>
+
+        <div class="sec">模型与能力</div>
+        <div class="card">
+          <div class="row"><div class="ico" style="background:#EEF3FD">◇</div><div class="mid"><div class="t1">模型</div><div class="t2">3 个 · 当前 mimo-v2.6-flash</div></div><div class="chev">›</div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#EEF3FD">✦</div><div class="mid"><div class="t1">Skill 管理</div><div class="t2">3 个 · 3 启用</div></div><div class="chev">›</div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#E9F4EF">⇄</div><div class="mid"><div class="t1">扩展</div><div class="t2">终端能力 · 占用 214 MB</div></div><div class="pill warn">未安装</div><div class="chev">›</div></div>
+        </div>
+
+        <div class="sec">外观与用量</div>
+        <div class="card">
+          <div class="row"><div class="ico" style="background:#EEF3FD">◐</div><div class="mid"><div class="t1">主题</div></div><div class="seg"><span class="on">跟随系统</span><span>浅色</span><span>深色</span></div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#EEF3FD">ⓘ</div><div class="mid"><div class="t1">用量账单</div><div class="t2">按日 / 模型 / 用途</div></div><div class="val">3.00M</div><div class="chev">›</div></div>
+        </div>
+
+        <div class="sec">关于</div>
+        <div class="card">
+          <div class="row"><div class="ico" style="background:#EEF3FD">▤</div><div class="mid"><div class="t1">使用说明</div></div><div class="chev">›</div></div>
+          <div class="hr"></div>
+          <div class="row"><div class="ico" style="background:#F1F3F6">ⓘ</div><div class="mid"><div class="t1">版本</div></div><div class="val">0.8.1</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 规则卡 -->
+  <div class="rules">
+    <h4>一条规则：右侧控件 = 这一行会发生什么</h4>
+    <div class="rgrid">
+      <div class="r"><div class="demo"><div class="sw" style="transform:scale(.8);transform-origin:left"><i></i></div></div><div class="lab"><b>开关</b>　就地开/关，不跳页</div></div>
+      <div class="r"><div class="demo"><div class="seg" style="transform:scale(.82);transform-origin:left"><span>只读</span><span>需确认</span><span class="on">允许</span></div></div><div class="lab"><b>分段</b>　就地单选，<b>零弹窗</b></div></div>
+      <div class="r"><div class="demo"><span class="val">3 个</span><span class="chev">›</span></div><div class="lab"><b>值 + ›</b>　进下一层</div></div>
+      <div class="r"><div class="demo"><span class="val">anysearch.com</span><span class="chev">↗</span></div><div class="lab"><b>↗</b>　离开 App（外链）</div></div>
+      <div class="r"><div class="demo"><span class="val">0.8.1</span></div><div class="lab"><b>无控件</b>　只读信息</div></div>
+    </div>
+  </div>
+
+  <div class="note">
+    <div class="cols">
+      <div>
+        <b>现状的问题</b>
+        <ul>
+          <li>同样的行长着<b>五种行为</b>：跳页、弹窗单选、弹窗输入、内联展开、就地开关 —— 点之前猜不到结果</li>
+          <li><b>「获取 Key」是外链</b>，看起来和「AnySearch Key」（弹窗输入）一模一样，一个改配置、一个离开 App</li>
+          <li>主题/权限用弹窗，但和"跳页行"长得一样，弹窗本身又多一层</li>
+          <li>联网搜索整组是<b>自定义行</b>：图标 28、字号 14，和上下两组对不齐</li>
+          <li>分区不齐：模型/扩展/Skill 在「功能」，联网搜索却单独成组；危险动作散落各处</li>
+          <li>第一屏看不到"我现在是什么配置"（模型、窗口、今日用量都在深处）</li>
+        </ul>
+      </div>
+      <div>
+        <b>方案要点</b>
+        <ul>
+          <li>两个弹窗（主题、权限）改成<b>内联三段分段</b>：点一下就地生效，少一层弹窗</li>
+          <li>永久允许的工具改成 <b>二级页</b>（`›`），不再内联展开，设置页不再忽长忽短</li>
+          <li>外链统一 <b>↗</b>；只读信息不给任何控件</li>
+          <li>每行补一句 <b>10.5sp 副标题</b>（"扩展""永久允许的工具"这类名字不自解释）</li>
+          <li>重新分组：<b>当前配置 → 对话 → 模型与能力 → 外观与用量 → 关于</b></li>
+          <li>顶部<b>状态卡</b>：模型 + 上下文窗口 + 权限 + 今日用量，第一屏回答"我现在什么配置"</li>
+        </ul>
+      </div>
+    </div>
+    <b>两个需要你定的</b>
+    <ul>
+      <li><b>顶部状态卡</b>要不要？它是新增展示，会让第一屏少放两组功能（信息密度换"一眼看清"）。</li>
+      <li><b>分段控件</b>在窄屏上放三档（只读/需确认/允许）文字够不够？不够的话退化成"当前值 + ›"打开弹层。</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

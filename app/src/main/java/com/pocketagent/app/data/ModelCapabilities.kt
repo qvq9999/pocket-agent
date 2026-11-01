@@ -299,3 +299,53 @@ fun ModelProfile.visionDisplay(): VisionDisplay {
 /** 模型表命中的规则名，用于在界面上交代"依据是什么" */
 fun ModelProfile.capabilitySource(): String =
     ModelCapabilities.of(modelId).matched.joinToString(" + ").ifBlank { "未收录" }
+
+// ───────────── 上下文窗口 ─────────────
+//
+// 为什么需要这一组：OpenAI 兼容接口的 /models 只返回 id/object/owned_by，**拿不到**窗口大小
+// （这个项目里曾经写死 32k，于是所有模型都被当成 32k 用，长任务必然在半路丢手册）。
+// 现在的取值顺序是：用户手填 > 按模型名声明的表 > 保守默认值。
+
+/** 手填与声明的上限：再大没有任何厂商支持，纯属手滑 */
+const val MAX_CONTEXT_WINDOW = 1_000_000
+
+/** 查不到任何信息时的保守默认值。故意小：设小了只是少放点历史，设大了请求直接 400 */
+const val DEFAULT_CONTEXT_WINDOW = 32_000
+
+/**
+ * 按模型名声明上下文窗口（token）。取值只写各家公开文档明确写过的；
+ * 拿不准返回 null，交给默认值 —— 宁可保守，也不要给出一个假的大窗口让请求必炸。
+ *
+ * 注意：这仍然是**声明**，不是探测。网关可能把窗口改小，所以真正发请求时
+ * 还要有 "400 → 缩短历史重试" 的自愈（AppViewModel.agentTurn 里那段）。
+ */
+fun declaredContextWindow(modelId: String): Int? {
+    if (modelId.isBlank()) return null
+    val s = modelId.lowercase()
+    // o1/o3/o4 系列：名字就是 "o3-mini" 这种，前面可能是 "openai/"
+    val oSeries = Regex("(^|[/\\-_:])o[1-9]").containsMatchIn(s)
+    return when {
+        s.contains("gemini") -> 1_000_000
+        s.contains("claude") -> 200_000
+        s.contains("gpt-5") || s.contains("gpt5") || s.contains("gpt-6") -> 400_000
+        s.contains("gpt-4.1") -> 1_000_000
+        s.contains("gpt-4o") || s.contains("gpt-4-turbo") -> 128_000
+        oSeries -> 200_000
+        s.contains("deepseek") -> 128_000
+        s.contains("qwen") -> 131_072
+        s.contains("kimi") || s.contains("moonshot") -> 256_000
+        s.contains("glm") -> 200_000
+        s.contains("doubao") -> 256_000
+        s.contains("grok") -> 256_000
+        s.contains("llama") || s.contains("mistral") || s.contains("mixtral") -> 128_000
+        s.contains("gpt-4") -> 128_000
+        else -> null
+    }
+}
+
+/** 实际生效的窗口：手动设置 > 模型表声明 > 默认 32k。所有预算都读这一个函数 */
+fun ModelProfile.effectiveContextWindow(): Int =
+    (contextWindow?.takeIf { it in 4_000..MAX_CONTEXT_WINDOW }
+        ?: declaredContextWindow(modelId)
+        ?: DEFAULT_CONTEXT_WINDOW)
+        .coerceIn(4_000, MAX_CONTEXT_WINDOW)

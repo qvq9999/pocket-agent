@@ -46,6 +46,8 @@ object OfficeFiles {
     private const val NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     private const val NS_S = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     private const val NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    private const val NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    private const val NS_P = "http://schemas.openxmlformats.org/presentationml/2006/main"
     private const val NS_PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
     private const val NS_XML = "http://www.w3.org/XML/1998/namespace"
 
@@ -218,6 +220,12 @@ object OfficeFiles {
 
         if (truncated) sb.append("…（内容过长已截断，共 $pCount 段 / $tCount 个表格）\n")
 
+        // 结构摘要：模型只看文本时**不知道自己看不见什么**，于是会断言"文档里没有图"，
+        // 或者改完文字把图注挤错位也毫无察觉。这里不展开内容，只报个数与边界，
+        // 一行字的成本换掉一整类误判。
+        val unseen = docxUnseenParts(zip)
+        if (unseen.isNotBlank()) sb.append('\n').append(unseen).append('\n')
+
         // 页眉 / 页脚：以前完全不读，于是"把页眉的公司名改掉"这类需求，
         // 模型只能回答"文档里没有" —— 它根本看不见。
         val extra = readExtraParts(zip)
@@ -246,6 +254,30 @@ object OfficeFiles {
             if (level in 1..6) append(" H$level")
             if (isList) append(" ·")
         }
+    }
+
+    /**
+     * 这份文档里"本工具看不见但确实存在"的东西。
+     *
+     * 只数不解析：图片的媒体文件在 word/media/ 下，批注在 comments.xml，
+     * 修订是 document.xml 里的 w:ins/w:del。报出来是为了让模型知道边界，
+     * 不是为了让它去改 —— 这些本工具都不支持。
+     */
+    private fun docxUnseenParts(zip: Map<String, ByteArray>): String {
+        val media = zip.keys.count { it.startsWith("word/media/") }
+        val hasComments = zip.keys.any { it == "word/comments.xml" }
+        val body = zip["word/document.xml"]
+        val revisions = if (body == null) 0 else runCatching {
+            val t = String(body, Charsets.UTF_8)
+            Regex("<w:(ins|del)[ >]").findAll(t).count()
+        }.getOrDefault(0)
+        val parts = ArrayList<String>()
+        if (media > 0) parts.add("$media 张图片/媒体")
+        if (hasComments) parts.add("批注")
+        if (revisions > 0) parts.add("$revisions 处修订未处理")
+        if (parts.isEmpty()) return ""
+        return "（另含 ${parts.joinToString("、")}，本工具不读取也不修改；" +
+            "需要动它们时请如实告诉用户）"
     }
 
     private fun readExtraParts(zip: Map<String, ByteArray>): List<Pair<String, String>> {
@@ -315,7 +347,7 @@ object OfficeFiles {
                         // 标签本身保持纯净（[t1.r2.c2]），合并信息挂在文本后面，
                         // 这样模型按标签取坐标时不需要先剥掉括号里的注解
                         val suffix = if (mark.isNotEmpty()) "〔$mark〕" else ""
-                        parts += "[t$table.r$row.c$col] ${anchor.textOf()}$suffix"
+                        parts += "[t$table.r$row.c$col] ${cellText(anchor)}$suffix"
                     } else {
                         // 被合并覆盖的位置：给个记号，否则看起来像"空单元格"
                         parts += "↑"
@@ -329,6 +361,16 @@ object OfficeFiles {
     }
 
     private fun tcProps(tc: Element): Element? = children(tc, "tcPr").firstOrNull()
+
+    /**
+     * 单元格的可见文字，段与段之间用 `⏎` 标出来。
+     *
+     * 以前直接把所有段落拼成一串：一个两行的格子在读出来时变成"第二行第一行"糊在一起，
+     * 模型照抄这串文字去 docx_fill 里找，而替换是按**段落**匹配的，
+     * 于是永远 NO_MATCH，怎么重试都过不去。标出断点后它才知道该一行一行改。
+     */
+    private fun cellText(tc: Element): String =
+        children(tc, "p").joinToString("⏎") { it.textOf() }
 
     private fun gridSpanOf(tc: Element): Int {
         val pr = tcProps(tc) ?: return 1
@@ -417,21 +459,44 @@ object OfficeFiles {
         val changed = HashSet<String>()
 
         // ① 文本替换：在段落级拼接后匹配，能跨 run
+        //
+        // 段落文本按部件缓存一份：以前每个 find 都要把整份文档的 DOM 重新遍历拼接，
+        // 50 处替换 × 5000 段 = 25 万次全段遍历，填一张大表能卡十几秒。
+        // 缓存后每个 find 只剩字符串比较，改过的段落就地作废（置 null 懒重算）。
+        class Idx(val paras: ArrayList<Element>, val texts: Array<String?>)
+        val index = parts.map { (_, d) ->
+            val pl = d.getElementsByTagNameNS(NS_W, "p")
+            val list = ArrayList<Element>(pl.length)
+            for (i in 0 until pl.length) (pl.item(i) as? Element)?.let { list.add(it) }
+            Idx(list, arrayOfNulls(list.size))
+        }
         for ((find, replace) in replacements) {
             if (find.isEmpty()) {
                 misses.add("find 不能为空")
                 continue
             }
+            val looseNeedle = find.filter { !it.isWhitespace() }
             var hit = 0
-            for ((name, d) in parts) {
-                var partHit = 0
-                val paragraphs = d.getElementsByTagNameNS(NS_W, "p")
-                for (i in 0 until paragraphs.length) {
-                    val p = paragraphs.item(i) as? Element ?: continue
-                    partHit += replaceInParagraph(p, find, replace)
+            index.forEachIndexed { pi, idx ->
+                for (i in idx.paras.indices) {
+                    var t = idx.texts[i]
+                    if (t == null) {
+                        t = idx.paras[i].textOf()
+                        idx.texts[i] = t
+                    }
+                    // 廉价筛查：命中不了就完全不必进 replaceInParagraph 走 DOM
+                    val candidate = t.contains(find) ||
+                        (looseNeedle.isNotEmpty() &&
+                            t.length > looseNeedle.length &&
+                            t.filter { c -> !c.isWhitespace() }.contains(looseNeedle))
+                    if (!candidate) continue
+                    val n = replaceInParagraph(idx.paras[i], find, replace)
+                    if (n > 0) {
+                        idx.texts[i] = null
+                        hit += n
+                        changed.add(parts[pi].first)
+                    }
                 }
-                if (partHit > 0) changed.add(name)
-                hit += partHit
             }
             if (hit == 0) misses.add("找不到「${find.take(30)}」")
         }
@@ -653,39 +718,60 @@ object OfficeFiles {
     }
 
     /** 把 [start, end) 这一段文本换成 replace（可跨多个 w:t 节点） */
+    /**
+     * 把 [start, end) 这一段文本换成 replace（可跨多个 w:t 节点）。
+     *
+     * 新文本按**各节点被覆盖的字符数**成比例分配，而不是整段落进第一个节点：
+     * 「请把**这份**报表发出」在 XML 里就是三个 run，全塞进第一个 run 会让中间的
+     * 加粗与颜色在替换后凭空消失 —— 用户看到的就是"改完一个字，半行都不粗了"。
+     * 按比例分完，每个 run 的 rPr 原样保留。
+     */
     private fun splice(p: Element, start: Int, end: Int, replace: String) {
-        val nodes = textNodes(p)
+        class Touch(val node: Element, val from: Int, val to: Int)
+        val touches = ArrayList<Touch>()
         var offset = 0
-        var inserted = false
-        for (t in nodes) {
+        for (t in textNodes(p)) {
             val s = t.textContent ?: ""
             val nodeStart = offset
             val nodeEnd = offset + s.length
             offset = nodeEnd
             if (nodeEnd <= start || nodeStart >= end) continue
-
-            val localStart = (start - nodeStart).coerceIn(0, s.length)
-            val localEnd = (end - nodeStart).coerceIn(0, s.length)
-            val prefix = s.substring(0, localStart)
-            val suffix = s.substring(localEnd)
-            val newText = if (!inserted) {
-                inserted = true
-                prefix + replace + suffix
-            } else {
-                prefix + suffix
-            }
-            setText(t, newText)
+            touches.add(
+                Touch(
+                    t,
+                    (start - nodeStart).coerceIn(0, s.length),
+                    (end - nodeStart).coerceIn(0, s.length),
+                )
+            )
+        }
+        if (touches.isEmpty()) return
+        val covered = touches.sumOf { it.to - it.from }
+        var given = 0
+        touches.forEachIndexed { i, touch ->
+            val s = touch.node.textContent ?: ""
+            val prefix = s.substring(0, touch.from.coerceAtMost(s.length))
+            val suffix = s.substring(touch.to.coerceAtMost(s.length))
+            // 最后一个节点拿走全部余量：整数除法会丢字符，宁可让它偏一点也不能少字
+            val share = if (i == touches.lastIndex) replace.length - given
+            else if (covered <= 0) 0
+            else (replace.length.toLong() * (touch.to - touch.from) / covered).toInt()
+            given += share
+            setText(touch.node, prefix + replace.substring(given - share, given) + suffix)
         }
     }
 
     /**
-     * 把单元格内容换成 value，尽量保留原有段落/运行属性。
+     * 把单元格内容换成 value，尽量保留原有段落与运行属性。
+     *
+     * 值里带换行时按**一行一段**铺开：以前只留第一个段落，于是"地址：XX市\n电话：139…"
+     * 这种两行内容会被压成一行，而模板里那个格子本来就是设计成两行的。
+     * 复用已有段落（而不是新建）是关键 —— 新段落没有原段的 pPr，居中/缩进会丢。
      *
      * 返回**被删掉的段落数**：调用方（docxFill 的结构自检）必须知道这份收缩是
      * 有意的，否则会把正常填写误判成"段落变少 = 文档损坏"。
      */
     private fun setCellText(doc: Document, cell: Element, value: String): Int {
-        val ps = children(cell, "p")
+        val ps = children(cell, "p").toMutableList()
         val first = ps.firstOrNull()
         if (first == null) {
             val p = doc.createElementNS(NS_W, "w:p")
@@ -697,22 +783,235 @@ object OfficeFiles {
             cell.appendChild(p)
             return 0
         }
-        // 只留第一个段落，避免旧内容残留在后续段落里
-        val extra = ps.drop(1)
-        extra.forEach { cell.removeChild(it) }
-
-        val ts = textNodes(first)
-        if (ts.isEmpty()) {
-            val r = doc.createElementNS(NS_W, "w:r")
-            val t = doc.createElementNS(NS_W, "w:t")
-            setText(t, value)
-            r.appendChild(t)
-            first.appendChild(r)
-        } else {
-            setText(ts[0], value)
-            ts.drop(1).forEach { setText(it, "") }
+        val lines = value.split('\n').ifEmpty { listOf("") }
+        // 段落不够就克隆第一个补齐：克隆带上原段的 pPr，格式因此能延续
+        while (ps.size < lines.size) {
+            val clone = first.cloneNode(true) as Element
+            cell.appendChild(clone)
+            ps.add(clone)
         }
-        return extra.size
+        var dropped = 0
+        ps.drop(lines.size).forEach {
+            cell.removeChild(it)
+            dropped++
+        }
+        lines.forEachIndexed { i, line ->
+            val ts = textNodes(ps[i])
+            if (ts.isEmpty()) {
+                val r = ps[i].ownerDocument.createElementNS(NS_W, "w:r")
+                val t = ps[i].ownerDocument.createElementNS(NS_W, "w:t")
+                setText(t, line)
+                r.appendChild(t)
+                ps[i].appendChild(r)
+            } else {
+                setText(ts[0], line)
+                ts.drop(1).forEach { setText(it, "") }
+            }
+        }
+        return dropped
+    }
+
+    // ─────────────────────────── PPTX 读 / 改 ───────────────────────────
+
+    data class PptxView(val text: String, val slides: Int, val shapes: Int)
+
+    /**
+     * 一处幻灯片文本编辑。
+     *
+     * [slide] / [shape] 都是 1-based，与 [pptxRead] 输出的 `[s页.框号]` 标签一致。
+     * [find] 留空 = 把整个文本框换成 [replace]；给了 find 就只做精确替换（可跨 run）。
+     */
+    data class PptEdit(val slide: Int, val shape: Int, val find: String, val replace: String)
+
+    /**
+     * 一页里的可编辑形状，按文档顺序。
+     *
+     * 只取 spTree 的**直接子节点**：组合形状（grpSp）里的成员不单独编号，
+     * 否则读侧给的坐标会和写侧找到的形状错位 —— 那种 bug 一旦出，用户看到的就是
+     * "改第 2 个框，结果动到了第 3 个"。
+     */
+    private fun pptShapes(slide: Element): List<Element> {
+        val tree = children(slide, "cSld").firstOrNull()?.let { children(it, "spTree").firstOrNull() }
+            ?: return emptyList()
+        return children(tree, "sp") + children(tree, "graphicFrame")
+    }
+
+    /** 一个形状里的可见文字：文本框按段落拼，表格按"行 | 单元格"拼 */
+    private fun pptShapeText(shape: Element): String {
+        // 注意判的是形状**自己**是什么：graphicFrame 就是表格载体，
+        // 找它的子节点里有没有 graphicFrame 永远为 false，表格会被读成空
+        if (shape.localName == "graphicFrame") {
+            val nodes = shape.getElementsByTagNameNS(NS_A, "tbl")
+            val tbl = nodes.item(0) as? Element ?: return ""
+            return children(tbl, "tr").joinToString("\n") { tr ->
+                children(tr, "tc").joinToString(" | ") { it.textOf() }
+            }
+        }
+        val body = children(shape, "txBody").firstOrNull() ?: return ""
+        return children(body, "p").joinToString("\n") { it.textOf() }
+    }
+
+    fun pptxRead(bytes: ByteArray, maxChars: Int = 18000): PptxView {
+        val zip = unzip(bytes)
+        val names = zip.keys
+            .filter { Regex("^ppt/slides/slide\\d+\\.xml$").matches(it) }
+            .sortedBy { it.substringAfter("slide").substringBefore(".xml").toIntOrNull() ?: 0 }
+        if (names.isEmpty()) throw ToolError("BAD_OFFICE", "这个 pptx 里没有幻灯片，可能不是演示文稿")
+        val sb = StringBuilder()
+        var truncated = false
+        var shapeTotal = 0
+        names.forEachIndexed { idx, name ->
+            if (truncated) return@forEachIndexed
+            val slide = runCatching { parse(zip[name]!!) }.getOrNull()
+                ?.let { it.getElementsByTagNameNS(NS_P, "sld").item(0) as? Element } ?: return@forEachIndexed
+            val shapes = pptShapes(slide)
+            shapeTotal += shapes.size
+            if (sb.length + 24 > maxChars) { truncated = true; return@forEachIndexed }
+            sb.append("[第 ${idx + 1} 页] 共 ${shapes.size} 个可编辑形状\n")
+            shapes.forEachIndexed { si, sh ->
+                val t = pptShapeText(sh)
+                val isTable = sh.localName == "graphicFrame"
+                val line = "  [s${idx + 1}.${si + 1}${if (isTable) " 表格" else ""}] " +
+                    t.replace("\n", "\n        ")
+                if (sb.length + line.length + 2 > maxChars) { truncated = true; return@forEachIndexed }
+                sb.append(line).append('\n')
+            }
+        }
+        if (truncated) sb.append("…（内容过长已截断，共 ${names.size} 页）\n")
+        return PptxView(sb.toString().trimEnd(), names.size, shapeTotal)
+    }
+
+    /**
+     * 批量改幻灯片文字。**全部成功或有失败就整体不生效**，与 [docxFill] 同一条规矩。
+     *
+     * 只重打包真正改过的那几页，其余保持原始字节：少一次 XML 重排就少一分"改完版式变了"。
+     */
+    fun pptxEdit(bytes: ByteArray, edits: List<PptEdit>): ByteArray {
+        if (edits.isEmpty()) throw ToolError("BAD_ARGS", "edits 不能为空")
+        val zip = unzip(bytes)
+        val names = zip.keys
+            .filter { Regex("^ppt/slides/slide\\d+\\.xml$").matches(it) }
+            .sortedBy { it.substringAfter("slide").substringBefore(".xml").toIntOrNull() ?: 0 }
+        if (names.isEmpty()) throw ToolError("BAD_OFFICE", "这个 pptx 里没有幻灯片")
+
+        val misses = ArrayList<String>()
+        val changed = HashMap<String, ByteArray>()
+        // 同一页的多个编辑要在同一份 DOM 上依次做完，否则后一个编辑会覆盖前一个
+        edits.groupBy { it.slide }.forEach { (slideNo, list) ->
+            val part = names.getOrNull(slideNo - 1)
+            if (part == null) {
+                list.forEach { misses.add("没有第 $slideNo 页（这份共 ${names.size} 页）") }
+                return@forEach
+            }
+            if (part in changed) {
+                // 上面已经解过；这里重新解一次以保证拿到的是"改到一半"的版本
+                zip[part] = changed[part]!!
+            }
+            val doc = runCatching { parse(zip[part]!!) }.getOrElse {
+                list.forEach { misses.add("第 $slideNo 页解析失败") }
+                return@forEach
+            }
+            val slide = doc.getElementsByTagNameNS(NS_P, "sld").item(0) as? Element
+            if (slide == null) { list.forEach { misses.add("第 $slideNo 页结构异常") }; return@forEach }
+            val shapes = pptShapes(slide)
+            var touched = false
+            for (e in list) {
+                val sh = shapes.getOrNull(e.shape - 1)
+                if (sh == null) {
+                    misses.add("第 $slideNo 页没有第 ${e.shape} 个形状（这一页共 ${shapes.size} 个）")
+                    continue
+                }
+                val hit = if (e.find.isEmpty()) {
+                    pptSetShapeText(doc, sh, e.replace)
+                    true
+                } else {
+                    pptReplaceInShape(sh, e.find, e.replace) > 0
+                }
+                if (!hit) misses.add("第 $slideNo 页第 ${e.shape} 个形状里找不到「${e.find.take(30)}」")
+                else touched = true
+            }
+            if (touched) changed[part] = serialize(doc)
+        }
+        if (misses.isNotEmpty()) {
+            throw ToolError(
+                "NO_MATCH",
+                "以下操作没有生效，整个文件未做修改：" + misses.distinct().joinToString("；") +
+                    "\n先用 pptx_read 看清每页有哪些形状、里面是什么文字，再照 [s页.框号] 改；" +
+                    "find 必须是读到的原文（同一次调用里只改失败那一条，其余保持原样一起提交）。",
+            )
+        }
+        return rezip(bytes, changed)
+    }
+
+    /** 把整个形状换成 value：写进第一个 a:t，其余清空 —— 保留这个框原有的字体与位置 */
+    private fun pptSetShapeText(doc: Document, shape: Element, value: String) {
+        val ts = textNodes(shape)
+        if (ts.isEmpty()) {
+            val body = children(shape, "txBody").firstOrNull()
+                ?: doc.createElementNS(NS_P, "p:txBody").also { shape.appendChild(it) }
+            val p = doc.createElementNS(NS_A, "a:p")
+            val r = doc.createElementNS(NS_A, "a:r")
+            val t = doc.createElementNS(NS_A, "a:t")
+            setText(t, value)
+            r.appendChild(t); p.appendChild(r); body.appendChild(p)
+            return
+        }
+        // 多行按段落分：一个 a:t 里的 \n 不会被 PowerPoint 渲染成换行
+        val lines = value.split('\n')
+        val ps = shape.getElementsByTagNameNS(NS_A, "p")
+        val firstP = if (ps.length > 0) ps.item(0) as? Element else null
+        ts.forEach { setText(it, "") }
+        setText(ts[0], lines.firstOrNull().orEmpty())
+        if (lines.size > 1 && firstP != null) {
+            val parent = firstP.parentNode
+            var anchor: Node = firstP
+            lines.drop(1).forEach { line ->
+                val clone = firstP.cloneNode(true) as Element
+                val ct = textNodes(clone)
+                ct.forEach { setText(it, "") }
+                if (ct.isEmpty()) {
+                    val r = clone.ownerDocument.createElementNS(NS_A, "a:r")
+                    val t = clone.ownerDocument.createElementNS(NS_A, "a:t")
+                    setText(t, line); r.appendChild(t); clone.appendChild(r)
+                } else setText(ct[0], line)
+                parent.insertBefore(clone, anchor.nextSibling)
+                anchor = clone
+            }
+        }
+    }
+
+    private fun pptReplaceInShape(shape: Element, find: String, replace: String): Int {
+        var total = 0
+        // 段落级拼接后匹配：与 docx 同一套做法，能跨 run（PowerPoint 会把一行拆成多个 a:r）
+        val ps = ArrayList<Element>()
+        val bl = shape.getElementsByTagNameNS(NS_A, "p")
+        for (i in 0 until bl.length) ps.add(bl.item(i) as Element)
+        for (p in ps) {
+            while (true) {
+                val nodes = textNodes(p)
+                if (nodes.isEmpty()) break
+                val full = nodes.joinToString("") { it.textContent ?: "" }
+                val start = full.indexOf(find)
+                if (start < 0) break
+                var offset = 0
+                var inserted = false
+                for (t in nodes) {
+                    val s = t.textContent ?: ""
+                    val nodeStart = offset
+                    val nodeEnd = offset + s.length
+                    offset = nodeEnd
+                    if (nodeEnd <= start || nodeStart >= start + find.length) continue
+                    val localStart = (start - nodeStart).coerceIn(0, s.length)
+                    val localEnd = (start + find.length - nodeStart).coerceIn(0, s.length)
+                    val newText = if (!inserted) { inserted = true; s.substring(0, localStart) + replace + s.substring(localEnd) }
+                    else s.substring(0, localStart) + s.substring(localEnd)
+                    setText(t, newText)
+                }
+                total++
+                if (replace.contains(find)) break
+            }
+        }
+        return total
     }
 
     // ─────────────────────────── XLSX ───────────────────────────

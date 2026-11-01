@@ -3,6 +3,7 @@ package com.pocketagent.app.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.util.Log
 
 import androidx.compose.animation.core.spring
 import androidx.activity.compose.BackHandler
@@ -32,6 +33,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.focus.onFocusChanged
 
 import androidx.compose.foundation.gestures.awaitEachGesture
 
@@ -126,10 +129,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -140,6 +140,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -153,7 +154,7 @@ import com.pocketagent.app.data.groupedByRecent
 import com.pocketagent.app.data.ThinkingStyle
 import com.pocketagent.app.net.ThinkingRules
 
-private enum class Pop { NONE, MODEL, THINK, PERMIT, ATTACH }
+private enum class Pop { NONE, MODEL, THINK, PERMIT, ATTACH, MENU }
 
 /** WindowInsets.isImeVisible 仍带实验标记，但它比自建 ViewTreeObserver 稳，直接用 */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -165,6 +166,8 @@ fun ChatScreen(
     onOpenModels: () -> Unit,
     /** 顶栏「选工作区」chip 用；侧边栏不再提供重复入口 */
     onPickWorkspace: () -> Unit,
+    /** 导出当前会话（Markdown），由 AppRoot 拉起系统文件选择器 */
+    onExport: () -> Unit,
 ) {
     val persisted by vm.state.collectAsStateWithLifecycle()
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
@@ -177,6 +180,14 @@ fun ChatScreen(
     }
 
     var input by remember { mutableStateOf("") }
+    // 引导页点的示例句子：那边够不到这里的 state，走一次性的"待填草稿"，
+    // 消费完立刻清空，不会重复填
+    LaunchedEffect(vm.pendingInput) {
+        vm.pendingInput?.let {
+            input = it
+            vm.pendingInput = null
+        }
+    }
     // 长按菜单：记录被长按的消息与它当时的窗口矩形（菜单靠这个定位）
     var menuMsg by remember { mutableStateOf<ChatMsg?>(null) }
     var menuAnchor by remember { mutableStateOf(Rect.Zero) }
@@ -208,6 +219,25 @@ fun ChatScreen(
     var pop by remember { mutableStateOf(Pop.NONE) }
     var lastPop by remember { mutableStateOf(Pop.MODEL) }
     var lastNotice by remember { mutableStateOf("") }
+    /** 顶栏 ⋯ 里的"删除这段会话"要二次确认：删了不可恢复 */
+    var confirmDeleteSession by remember { mutableStateOf(false) }
+
+    // ── 弹层锚点：贴在被点的那颗胶囊下面，而不是固定右下角 ──
+    // composerH 是输入区**实测**高度（含 ime/nav 内边距），所以键盘弹起时弹层自然跟着上去；
+    // chipX 是每颗胶囊的窗口横坐标，思考胶囊宽度会随档位名变化，只能量不能算。
+    var composerH by remember { mutableStateOf(0) }
+    var chipX by remember { mutableStateOf<Map<Pop, Int>>(emptyMap()) }
+    var rootW by remember { mutableStateOf(0) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val popWidth = if (lastPop == Pop.ATTACH) 264.dp else 248.dp
+    val popStartDp = with(density) {
+        val anchorPx = chipX[lastPop] ?: 12.dp.roundToPx()
+        // 靠右的胶囊（权限）会让 248dp 弹层顶出屏幕，夹回可见范围内
+        val maxPx = (rootW - popWidth.roundToPx() - 8.dp.roundToPx()).coerceAtLeast(0)
+        anchorPx.coerceIn(0, maxPx).toDp()
+    }
+    val popBottomDp = with(density) { composerH.toDp() } + 6.dp
 
     // 抽屉的开合手势统一在 AppRoot 做：那里同时有开和关两个状态，
     // 手势放在同一处才能"跟手拖一半就停、松手看速度吸附"。这里只留按钮入口。
@@ -232,10 +262,8 @@ fun ChatScreen(
         androidx.activity.result.contract.ActivityResultContracts.TakePicture()
     ) { ok -> if (ok) cameraUri?.let { vm.addReference(it) } }
 
-    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     // 键盘状态：弹出层要跟着键盘抬高（否则被输入法盖住），聊天列表要在键盘弹起后重新贴底
     val imeVisible = WindowInsets.isImeVisible
-    val imeBottom = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
 
     /**
      * 输入法收起后主动失焦。
@@ -257,40 +285,40 @@ fun ChatScreen(
         Modifier
             .fillMaxSize()
             .background(pal().pageBg)
+            .onGloballyPositioned { rootW = it.size.width }
     ) {
         Column(Modifier.fillMaxSize()) {
-            TopBar(
-                title = "Pocket Agent",
-                onMenu = onOpenDrawer,
-                trailing = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 新会话：只清空当前消息流，不改模型和工作区
-                        Box(
-                            Modifier
-                                .size(30.dp)
-                                .clip(CircleShape)
-                                .background(pal().surfaceAlt)
-                                .clickable { vm.newConversation() },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Glyph(G.PLUS, 16.dp, pal().ink, 2.3f)
-                        }
-                        Spacer(Modifier.width(7.dp))
-                        // 工作区跟着对话走：这里读的是**本对话**的绑定，不是全局设置。
-                        // 未绑定时显示"选工作区"（空状态），失效时提示重新授权。
-                        WorkspaceChip(
-                            name = when {
-                                vm.workspaceBroken -> "需重新授权"
-                                vm.workspace == null -> "选工作区"
-                                else -> vm.workspace?.name.orEmpty()
-                            },
-                            broken = vm.workspaceBroken,
-                            onClick = onPickWorkspace,
-                            onClear = if (vm.workspace != null) ({ vm.detachWorkspace() }) else null,
-                        )
-                    }
-                },
-            )
+            // 顶栏两行：第一行是**这段会话的标题**（品牌名对用户没有信息量，挪进抽屉），
+            // 第二行是工作区——它决定"能不能碰文件"，是最该常驻的一条状态，点一下就能换。
+            run {
+                val cur = persisted.sessions.firstOrNull { it.id == persisted.currentSessionId }
+                val wsName = vm.workspace?.name.orEmpty()
+                val permText = when (permission) {
+                    PermissionMode.READONLY -> "只读"
+                    PermissionMode.CONFIRM -> "需确认"
+                    else -> "可读写"
+                }
+                TopBar(
+                    title = cur?.title?.ifBlank { null } ?: "新会话",
+                    subtitle = when {
+                        vm.workspaceBroken -> "需重新授权"
+                        wsName.isBlank() -> "选择工作区 · 才能读写文件"
+                        else -> "$wsName · $permText"
+                    },
+                    subtitleColor = when {
+                        vm.workspaceBroken -> pal().warn
+                        wsName.isBlank() -> pal().warn
+                        else -> null
+                    },
+                    onMenu = onOpenDrawer,
+                    onSubtitleClick = onPickWorkspace,
+                    trailing = {
+                        // 顶栏只留一个入口：会话级动作都收进这里，避免再出现第二个"＋"
+                        // （输入框左边那个 ＋ 是附件，同图标两种含义最容易点错）
+                        SquareIcon(G.MORE, onClick = { pop = Pop.MENU })
+                    },
+                )
+            }
 
             Box(
                 Modifier
@@ -300,64 +328,35 @@ fun ChatScreen(
                     }
             ) {
                 if (vm.messages.isEmpty()) {
-                    // 引导阶段**每次都由现状推导**（有没有模型/目录/发过消息），
-                    // 所以用户点「添加模型」跳去设置页、配好返回，卡片会自动变成第二步 ——
-                    // 不需要任何"返回时通知一下"的胶水代码。
-                    val stageNow = vm.onboardStage(persisted)
-                    // "先随便看看"只是本次收起，不写"跳过"：下次进来如果他还没配好，还能再看到
-                    var lookAround by remember(stageNow) { mutableStateOf(false) }
-                    if (stageNow != AppViewModel.OnboardStage.None && !lookAround) {
-                        val hasModel = vm.chatModels().isNotEmpty()
-                        val hasWs = vm.workspace != null && !vm.workspaceBroken
-                        // 垂直居中，与原来"你好"空态的位置一致：
-                        // 卡片摆在眼球落点上，而不是贴着顶栏往下掉
-                        Box(
-                            Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            OnboardCard(
-                                stage = stageNow,
-                                primaryText = when (stageNow) {
-                                    // 条件已满足说明在"重看"，只翻说明，不让人重新配一遍
-                                    AppViewModel.OnboardStage.Welcome ->
-                                        if (hasModel) "下一步" else "添加模型"
-                                    AppViewModel.OnboardStage.PickWorkspace ->
-                                        if (hasWs) "下一步" else "选择目录"
-                                    else -> ""
-                                },
-                                onPrimary = {
-                                    when {
-                                        stageNow == AppViewModel.OnboardStage.Welcome && !hasModel ->
-                                            onOpenModels()
-                                        stageNow == AppViewModel.OnboardStage.PickWorkspace && !hasWs ->
-                                            onPickWorkspace()
-                                        else -> vm.advanceOnboard()
-                                    }
-                                },
-                                onSample = { input = it },
-                                onSkip = { vm.dismissOnboard() },
-                                onLookAround = { lookAround = true },
-                            )
-                        }
-                    } else {
-                        EmptyState(
-                            modelName = model?.displayName,
-                            hasWorkspace = vm.workspace != null && !vm.workspaceBroken,
-                            onPick = { s -> input = s },
-                        )
-                    }
+                    // 引导已经独立成页（AppRoot 的 Screen.Onboard），会话页只留"你好 + 示例"。
+                    // 以前这里挂一张引导卡：和示例 chip、版本号挤在同一屏，内容一多就要滚，
+                    // 而且看起来像一块广告位，不像一段流程。
+                    EmptyState(
+                        modelName = model?.displayName,
+                        hasWorkspace = vm.workspace != null && !vm.workspaceBroken,
+                        onPick = { s -> input = s },
+                    )
                 } else {
                     // 一段会话一份列表状态。LazyListState 是按位置记忆的，沿用到另一段会话
                     // 就会从上一段的位置起步、再一路滚回末尾 —— 历史一长就是肉眼可见的抽搐。
                     // 用 sessionEpoch 当 key：切换会话时整块重建，滚动状态从零开始。
                     key(vm.sessionEpoch) {
-                        // 初始位置直接给到最后一条：第一帧就已经在底部，
-                        // 不需要"先渲染顶部再滚下来"的中间过程。配合下面的瞬时 scrollToItem，
-                        // 切会话时不会再看到页面自己动一下。
-                        val listState = rememberLazyListState(
-                            initialFirstVisibleItemIndex = vm.messages.lastIndex.coerceAtLeast(0),
-                            initialFirstVisibleItemScrollOffset = 0,
-                        )
+                        /*
+                         * 列表是**底部锚定**的（下面 LazyColumn 的 reverseLayout）：
+                         * index 0 = 最新一条，贴着视口底边，更早的内容往上排
+                         * （数据在 buildChatRows(...) 之后整体翻转）。
+                         *
+                         * 为什么非反过来不可：原来是"正着排 + 发现长高了再滚回底部"。
+                         * 正文每 60ms、思考每 80ms 提交一次，内容在**这一帧**长高，
+                         * 补滚动最快也要**下一帧**才落地 —— 于是每次提交都有一帧是错位的，
+                         * 60fps 下就是每秒十几回"顶上去再拉回"，正是用户说的
+                         * "生成时气泡上下抖"。锚定之后新增内容只往上顶，视口不动，
+                         * 也就不存在"追"这个动作，抖动从根上没有了。
+                         *
+                         * 附带好处：初始位置天然就在底部，切会话不再需要"先渲染顶部
+                         * 再滚下来"的补定位，键盘弹起把视口压矮也不需要重新贴底。
+                         */
+                        val listState = rememberLazyListState()
                         val scope = rememberCoroutineScope()
 
                         /**
@@ -378,27 +377,26 @@ fun ChatScreen(
                         /**
                          * 是否停在最底部。
                          *
-                         * 用 `canScrollForward` 而不是"最后一项完整可见"：
-                         * 后者在"最后一条比视口还高"时永远是 false（长回复极常见），
-                         * 于是贴底之后立刻被判定成"不在底部"，跟随就被自己关掉了。
+                         * 锚定布局下这就是"index 0 且贴着底边"，一句话判完：
+                         * 不看 canScrollForward（方向被 reverseLayout 翻转过，容易判反），
+                         * 也不看"最后一条是否完整可见"（长回复永远不完整）。
+                         * 而且它只在**用户真的滚动**时才变，流式长高不会让它来回翻，
+                         * 所以可以放心驱动浮标显隐和底部让位 padding。
                          */
                         val atBottom by remember(listState) {
                             derivedStateOf {
-                                listState.layoutInfo.totalItemsCount > 0 && !listState.canScrollForward
+                                listState.layoutInfo.totalItemsCount > 0 &&
+                                    listState.firstVisibleItemIndex == 0 &&
+                                    listState.firstVisibleItemScrollOffset == 0
                             }
                         }
 
                         /**
-                         * 是否继续跟随。
+                         * 是否跟随最新内容。
                          *
-                         * 这里只记**用户意图**，而且只能由用户的行为改变：
-                         * · 用户拖拽列表 → 立刻停止跟随（他就想看历史）；
-                         * · 用户滚回底部 / 点浮标 / 发新消息 → 重新跟随。
-                         *
-                         * 关键：**程序滚动不参与判定**。之前是"滚动一停就用 atBottom 覆盖"，
-                         * 而我们自己的贴底滚完时列表可能还在测量，读到的 atBottom 是 false，
-                         * 于是 autoFollow 被永久关掉 —— 表现为"跟半句就停"，而且之后每一轮
-                         * 都不再跟随（连自己新发的消息也不跟）。
+                         * 锚定布局下"跟随"**不需要任何滚动动作** —— 新长出来的内容自己
+                         * 会往上顶，视口始终停在底部。这里只用来记用户意图：他往上翻看
+                         * 历史时，新消息不要把他拽回底部。
                          */
                         var autoFollow by remember(listState) { mutableStateOf(true) }
 
@@ -407,110 +405,105 @@ fun ChatScreen(
                             if (dragging) autoFollow = false
                         }
 
-                        // 只会"恢复"，不会"关闭"：滚到底就重新跟随
-                        LaunchedEffect(listState) {
-                            snapshotFlow { listState.isScrollInProgress }.collect { moving ->
-                                if (!moving && !listState.canScrollForward &&
-                                    listState.layoutInfo.totalItemsCount > 0
-                                ) {
-                                    autoFollow = true
-                                }
-                            }
+                        // 用户自己翻回底部 = 重新跟随。atBottom 只在布局真的到底时为真，
+                        // 不会被程序滚动误判（以前"滚动一停就读 atBottom"会把自己关死）
+                        LaunchedEffect(atBottom) {
+                            if (atBottom) autoFollow = true
                         }
 
-                        // 首屏定位：启动后恢复当前会话、或从抽屉切到另一段会话，一律先落在最底部。
-                        // 刻意不依赖 atBottom —— 首帧测量完成时最后一条通常比视口高，
-                        // 靠它判断会静默不滚动。
-                        LaunchedEffect(listState) {
-                            if (vm.messages.isNotEmpty()) listState.scrollToVeryBottom()
-                        }
+                        /**
+                         * 手指是否按在列表上（**只观察、不消费**事件）。
+                         *
+                         * 一次点按从 down 到 up 中间隔着几十毫秒，而这段时间里流式内容
+                         * 还在往上顶；卡片跟着移动，up 就落到别的节点上 —— Compose 判定
+                         * down/up 不是同一个可点击节点时直接取消这次点击，用户那边就是
+                         * "点了没反应 / 打不开"。所以按住期间把正文/思考的提交冻住，
+                         * 抬手再继续（见 vm.holdStream）。
+                         */
+                        var pointerDown by remember(listState) { mutableStateOf(false) }
+                        LaunchedEffect(pointerDown) { vm.holdStream(pointerDown) }
 
+
+                        // 新消息插在 index 0（也就是底部）时，把锚点放回 0。
+                        //
+                        // 只盯**条数**：逐字长高、思考增长、工具卡展开都不改条数，
+                        // 所以这里一轮任务只会被叫醒几次，而不是每 60ms 一次 ——
+                        // 原来那种"每次增量都补一次滚动"正是抖动的来源。
                         var seenCount by remember { mutableStateOf(vm.messages.size) }
 
                         LaunchedEffect(listState) {
-                            // 触发源必须覆盖"这一轮里**任何**会长高的东西"：
-                            // 新增消息、正文逐字、思考逐字、工具卡出现/展开、失败原因变长。
-                            // 之前只盯「最后一条消息」的四个字段，于是"增长发生在别的消息上"
-                            // （比如最后一条是工具结果，正文在它前面继续流）就一次都不触发。
-                            // 现在改成：统计最后一条 user 之后**整轮**的字符与结构化增量。
                             snapshotFlow {
-                                val msgs = vm.messages
-                                var chars = 0
-                                var extras = 0
-                                var i = msgs.lastIndex
-                                while (i >= 0 && msgs[i].role != "user") {
-                                    val m = msgs[i]
-                                    chars += m.text.length + m.reasoning.length + m.detail.length
-                                    extras += m.calls.size * 1000 +
-                                        (m.tool?.diff?.size ?: 0) * 100 +
-                                        (m.tool?.summary?.length ?: 0)
-                                    i--
-                                }
-                                // 最后一条的角色：决定"新消息"要不要强行贴底
-                                ScrollSig(msgs.size, chars, extras, msgs.lastOrNull()?.role.orEmpty())
-                            }.collect { sig ->
-                                val appended = sig.count != seenCount
-                                seenCount = sig.count
-                                if (sig.count == 0) return@collect
-                                when {
-                                    // 自己发出去的消息：一定贴底并恢复跟随，用户不会想停在上一条
-                                    appended && sig.lastRole == "user" -> {
-                                        autoFollow = true
-                                        listState.scrollToVeryBottom()
-                                    }
-                                    // 回复/工具卡追加：用户在看历史时就不要拽他
-                                    appended -> if (autoFollow) listState.scrollToVeryBottom()
-                                    // 逐字增长
-                                    autoFollow -> listState.scrollToVeryBottom()
-                                }
+                                vm.messages.size to vm.messages.lastOrNull()?.role
+                            }.collect { (count, role) ->
+                                val appended = count != seenCount
+                                seenCount = count
+                                if (!appended || count == 0) return@collect
+                                // 自己发出去的消息一定贴底并恢复跟随；
+                                // 模型那侧的追加（新工具卡、新一轮草稿）只在跟随态才拽回去，
+                                // 用户正翻历史时不要把他拖走
+                                if (role == "user") autoFollow = true
+                                if (autoFollow) listState.scrollToItem(0)
                             }
                         }
 
-                        // 视口高度一变（键盘弹起/收起、通知条出现都会改变列表高度），
-                        // 如果**变矮之前**是贴底的，就重新贴底。
-                        //
-                        // 为什么不用 imeVisible 触发：insets 是逐帧动画，等它回调时视口可能已经
-                        // 缩过了，那一刻再问"在不在底部"答案一定是"不在"，条件自证其反。
-                        LaunchedEffect(listState) {
-                            var prevViewport = 0
-                            var prevAtBottom = true
-                            snapshotFlow {
-                                val info = listState.layoutInfo
-                                Triple(
-                                    info.viewportEndOffset - info.viewportStartOffset,
-                                    !listState.canScrollForward,
-                                    info.totalItemsCount,
-                                )
-                            }.collect { snap ->
-                                val h = snap.first
-                                val atEnd = snap.second
-                                val total = snap.third
-                                if (prevViewport > 0 && h < prevViewport && prevAtBottom && total > 0) {
-                                    // 视口变矮是外部原因（键盘），不是用户滚动 → 跟住真正的底部
-                                    autoFollow = true
-                                    listState.scrollToVeryBottom()
-                                }
-                                prevViewport = h
-                                prevAtBottom = atEnd
-                            }
-                        }
 
                         Box(Modifier.fillMaxSize()) {
                             LazyColumn(
                                 state = listState,
-                                modifier = Modifier.fillMaxSize(),
+                                // 底部锚定：index 0 在最下面，新内容往上顶（数据已翻转）
+                                reverseLayout = true,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    // 只观察、不消费：Initial pass 先看一眼"有没有手指按着"，
+                                    // 事件照常发给列表和卡片，点击/拖拽行为完全不受影响。
+                                    .pointerInput(listState) {
+                                        awaitEachGesture {
+                                            // 不消费任何事件：只是"看一眼有没有手指按着"，
+                                            // 点击与滚动照常交给列表和卡片。
+                                            awaitFirstDown(requireUnconsumed = false)
+                                            pointerDown = true
+                                            while (true) {
+                                                if (awaitPointerEvent().changes.none { it.pressed }) break
+                                            }
+                                            pointerDown = false
+                                        }
+                                    },
                                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
                                     start = 16.dp,
                                     end = 16.dp,
-                                    // 浮标出现时把底部留白让出来：它贴在右下角，正好压着
-                                    // 最后一条的用量行和失败原因，那两行是用户最想看的
-                                    bottom = if (atBottom) 10.dp else 58.dp,
+                                    top = 10.dp,
+                                    // **恒定**留白。以前是 if (autoFollow) 10 else 58：
+                                    // 用户一拖拽 autoFollow 就翻成 false，内容高度当场变 48dp，
+                                    // 列表于是又能多滚一截 —— 表现就是"滑到底部还能滚出一片空白"。
+                                    // 浮标改为直接浮在内容上（它有实底 + 描边），不再靠让位留白。
+                                    bottom = 10.dp,
                                 ),
                             ) {
                                 // 按「轮」聚合：一次回复 = 一个气泡（正文 + 工具调用 + 用量）。
                                 // 之前是一条消息一行，一次工具调用就多一张卡，用户问一句冒出四五个气泡。
-                                val rows = buildChatRows(vm.messages)
+                                // 列表是底部锚定的（reverseLayout），所以这里要把「最新在末尾」
+                                // 翻成「最新在 index 0」；每个 Turn 内部仍然是思考→正文→工具的阅读顺序。
+                                val rows = buildChatRows(vm.messages).reversed()
                                 val produced = collectProduced(vm.messages)
+
+                                // 翻转之后，"最下面一项"要排在最前面写。
+                                // 顺序（从底往上）：撤销提示 → 本对话产出 → 各轮消息。
+
+                                // 首个任务真改过文件之后的一次性提示：用户刚看到"改好了"，
+                                // 此刻他最需要知道的就是"改坏了怎么办"。
+                                if (vm.undoHint) {
+                                    item(key = "undoHint") { UndoHintRow { vm.dismissUndoHint() } }
+                                }
+
+                                // 产出文件跟在最后一条回复后面（不占固定底栏，随内容一起滚走）
+                                if (produced.isNotEmpty()) {
+                                    // key 带 sessionEpoch：切换会话时这一项必须整体重建，
+                                    // 否则会沿用上一段会话的组合状态
+                                    item(key = "produced-${vm.sessionEpoch}") {
+                                        ProducedFilesCard(produced) { vm.openProducedFile(it) }
+                                    }
+                                }
+
                                 items(rows, key = { it.key }) { row ->
                                     when (row) {
                                         is ChatRow.User -> {
@@ -551,31 +544,17 @@ fun ChatScreen(
                                         )
                                     }
                                 }
-
-                                // 产出文件跟在最后一条回复后面，随内容一起滚走（不占固定底栏）
-                                if (produced.isNotEmpty()) {
-                                    // key 带 sessionEpoch：切换会话时这一项必须整体重建，
-                                    // 否则会沿用上一段会话的组合状态
-                                    item(key = "produced-${vm.sessionEpoch}") {
-                                        ProducedFilesCard(produced) { vm.openProducedFile(it) }
-                                    }
-                                }
-
-                                // 首个任务真改过文件之后的一次性提示。
-                                // 放在列表末尾、紧接在结果后面：用户刚看到"改好了"，
-                                // 此刻他最需要知道的就是"改坏了怎么办"。
-                                if (vm.undoHint) {
-                                    item { UndoHintRow { vm.dismissUndoHint() } }
-                                }
                             }
 
-                            // 「回到底部」：只有真的翻上去了才出现，贴在列表右下角，
-                            // 不挡正文、不挡输入区，和输入区用同一套胶囊 + 描边样式。
+                            // 「回到底部」：只在用户翻上去看历史（autoFollow 关）且确实
+                            // 还没到底时出现。锚定布局下 atBottom 只随用户滚动变化，
+                            // 流式长高不会让它来回翻，浮标也就不会跟着闪。
                             // 这里不用 AnimatedVisibility —— 它在 Column 作用域里会解析到
                             // ColumnScope 那个重载，塞进 Box 里用不了；淡入自己算更省事。
+                            val pillWanted = !autoFollow && !atBottom
                             val jumpAlpha by animateFloatAsState(
-                                targetValue = if (atBottom) 0f else 1f,
-                                animationSpec = tween(if (atBottom) 110 else 150),
+                                targetValue = if (pillWanted) 1f else 0f,
+                                animationSpec = tween(if (pillWanted) 150 else 110),
                                 label = "jumpToBottom",
                             )
                             if (jumpAlpha > 0.01f) {
@@ -592,9 +571,9 @@ fun ChatScreen(
                                         },
                                 ) {
                                     scope.launch {
-                                        // 直接落到真正的底部：长历史里 animateScrollToItem 要走好几秒，
-                                        // 而且它同样只把"最后一条的顶部"对齐，未必到底
-                                        listState.scrollToVeryBottom()
+                                        // 锚定布局下"底部"就是 index 0，一步到位：
+                                        // 不需要"先跳到最后一项顶部再补滚"的两段式
+                                        listState.scrollToItem(0)
                                         // 点它=用户明确想跟最新内容，顺手把跟随打开。
                                         // 只滚一次的话，回复继续往下长时人又被甩在后面。
                                         autoFollow = true
@@ -686,14 +665,10 @@ fun ChatScreen(
             }
 
             Composer(
-                modifier = Modifier.navigationBarsPadding().imePadding(),
+                modifier = Modifier.navigationBarsPadding(),
                 modelLabel = model?.displayName ?: "未选模型",
                 thinkingLabel = thinkingLabel(model, vm),
                 thinkingEnabled = (model?.thinkingLevels?.isNotEmpty() == true),
-                thinkingColors = thinkChipColors(
-                    model,
-                    model?.let { vm.currentThinkingLevel(it) },
-                ),
                 permission = permission,
                 hasModel = model != null,
                 workspaceName = vm.workspace?.name.orEmpty(),
@@ -729,31 +704,67 @@ fun ChatScreen(
                     "$who：${q.text.replace('\n', ' ').take(40)}"
                 },
                 onClearQuote = { vm.clearQuote() },
+                onOpenWorkspace = onPickWorkspace,
+                onMeasured = { composerH = it },
+                onChipPlaced = { p, x -> chipX = chipX + (p to x) },
             )
         }
 
-        // ── 锚定在输入区上方的就地弹出层 ──
+        // ── 就地弹出层 ──
         if (pop != Pop.NONE) {
-            Box(Modifier.fillMaxSize().clickable { pop = Pop.NONE })
+            // 去掉水波纹：这层是透明的"点外面关闭"，它正好盖在下面那颗胶囊上。
+            // 再点一次胶囊时事件命中这层，默认 indication 会在胶囊位置闪一块灰 ——
+            // 用户看到的就是"点关闭按钮时按钮闪了一下"。
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember {
+                            androidx.compose.foundation.interaction.MutableInteractionSource()
+                        },
+                        indication = null,
+                    ) { pop = Pop.NONE }
+            )
         }
+
+        // 会话菜单从顶栏右下角展开：它是"这段会话"的动作集合，
+        // 位置必须跟触发它的 ⋯ 在同一侧，否则点完要满屏找弹窗
         AnimatedVisibility(
-            visible = pop != Pop.NONE,
+            visible = pop == Pop.MENU,
+            enter = fadeIn(tween(110)) + scaleIn(tween(150), initialScale = 0.96f),
+            exit = fadeOut(tween(90)) + scaleOut(tween(110), targetScale = 0.98f),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = statusTop + 50.dp, end = 8.dp),
+        ) {
+            PopoverSurface(width = 216.dp) {
+                SessionMenu(
+                    hasWorkspace = vm.workspace != null,
+                    onNewChat = { pop = Pop.NONE; vm.newConversation() },
+                    onOpenSessions = { pop = Pop.NONE; onOpenDrawer() },
+                    onDetachWorkspace = { pop = Pop.NONE; vm.detachWorkspace() },
+                    onExport = { pop = Pop.NONE; onExport() },
+                    onDelete = { pop = Pop.NONE; confirmDeleteSession = true },
+                )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = pop != Pop.NONE && pop != Pop.MENU,
             enter = fadeIn(tween(120)) + scaleIn(tween(160), initialScale = 0.96f),
             exit = fadeOut(tween(100)) + scaleOut(tween(120), targetScale = 0.98f),
             modifier = Modifier
-                // 附件菜单是从输入框左边的加号长出来的，所以贴左；其余三个弹层仍在右下
-                .align(if (lastPop == Pop.ATTACH) Alignment.BottomStart else Alignment.BottomEnd)
-                // 卡片贴右下角 14dp / 122dp（122dp ≈ 输入区高度）。
-                // 键盘弹起时输入区整块被 imePadding 抬上去了，弹层也要加上同样的位移，
-                // 否则它会停在原位、正好被输入法盖住 —— 这是「输入法开着时点模型胶囊看不到弹窗」的根因。
+                // 三个控制胶囊各自在自己的位置下面展开：模型贴左缘、权限贴右缘、
+                // 思考跟着它自己量到的横坐标走。以前一律钉在右下角 122dp，
+                // 键盘一弹就飘到半屏之外，看着像"跟按钮没关系"。
+                .align(Alignment.BottomStart)
                 .padding(
-                    start = if (lastPop == Pop.ATTACH) 12.dp else 0.dp,
-                    end = if (lastPop == Pop.ATTACH) 0.dp else 14.dp,
-                    bottom = 122.dp + if (imeVisible) imeBottom else navBottom,
+                    start = popStartDp,
+                    bottom = popBottomDp,
                 ),
         ) {
             // 238dp：322dp 的默认宽度会盖住半个屏幕，而这个菜单只有三行短标签
-            PopoverSurface(width = if (lastPop == Pop.ATTACH) 264.dp else 292.dp) {
+            PopoverSurface(width = popWidth) {
                 when (lastPop) {
                     Pop.MODEL -> ModelPopover(
                         vm = vm,
@@ -809,6 +820,8 @@ fun ChatScreen(
                         onFile = { pop = Pop.NONE; filePicker.launch(arrayOf("*/*")) },
                     )
                     Pop.NONE -> Unit
+                    // 会话菜单用的是另一块 AnimatedVisibility（贴顶栏），这里不渲染
+                    Pop.MENU -> Unit
                 }
             }
         }
@@ -881,6 +894,20 @@ fun ChatScreen(
                 onCancel = { pendingDelete = null },
             )
         }
+
+        // 顶栏 ⋯ →「删除这段会话」。只删会话本身，工作区里的文件一个不动
+        if (confirmDeleteSession) {
+            ConfirmDialog(
+                title = "删除这段会话？",
+                message = "这段会话和它的全部消息都会被移除，删除后无法恢复。" +
+                    "工作区里的文件不受影响。",
+                onConfirm = {
+                    confirmDeleteSession = false
+                    persisted.currentSessionId?.let { vm.deleteSession(it) }
+                },
+                onCancel = { confirmDeleteSession = false },
+            )
+        }
     }
 }
 
@@ -927,43 +954,59 @@ private fun SummaryRow(text: String) {
     }
 }
 
+/**
+ * 控制条上的一颗胶囊。
+ *
+ * 宽度**定死**（[width]）：胶囊跟着文字长短伸缩时，整条控制条会随着档位名/权限名
+ * 一变就左右挪一下 —— 用户在"思考 开 → 思考 最高"这种切换里看到的是一整排控件在抖。
+ * 宁可截断：文字放不下就走省略号，位置永远不动。
+ *
+ * 默认**无底色**：整条控制条是"配置"，不该抢正文和发送键的注意力。
+ * 只有传了 bg 才有底色（目前只有「允许」用），让颜色专门表示"这里要注意"。
+ */
 @Composable
-private fun WorkspaceChip(
-    name: String,
-    broken: Boolean = false,
+private fun CtrlChip(
+    text: String,
+    width: Dp,
+    modifier: Modifier = Modifier,
+    glyph: G? = null,
+    glyphTint: Color? = null,
+    dot: Color? = null,
+    bg: Color = Color.Transparent,
+    fg: Color? = null,
     onClick: () -> Unit,
-    /** 已绑定时给一个"解除绑定"的小叉；未绑定则不显示 */
-    onClear: (() -> Unit)? = null,
 ) {
+    val ink = fg ?: pal().muted
     Row(
-        Modifier
-            .height(32.dp)
+        modifier
+            .width(width)
+            .height(28.dp)
             .clip(RoundedCornerShape(50))
-            .background(pal().surfaceAlt)
+            .background(bg)
             .clickable(onClick = onClick)
-            .padding(start = 11.dp, end = if (onClear != null) 5.dp else 11.dp),
+            .padding(start = 8.dp, end = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Glyph(if (broken) G.WARN else G.FOLDER, 14.dp, if (broken) pal().warn else pal().muted, 1.9f)
-        Spacer(Modifier.width(6.dp))
-        Text(
-            name,
-            fontSize = 13.sp,
-            color = if (broken) pal().warn else pal().ink,
-            maxLines = 1,
-        )
-        if (onClear != null) {
-            Spacer(Modifier.width(4.dp))
-            Box(
-                Modifier
-                    .size(22.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onClear),
-                contentAlignment = Alignment.Center,
-            ) {
-                Glyph(G.CLOSE, 11.dp, pal().muted, 2.1f)
-            }
+        if (dot != null) {
+            Box(Modifier.size(5.dp).clip(CircleShape).background(dot))
+            Spacer(Modifier.width(5.dp))
         }
+        if (glyph != null) {
+            Glyph(glyph, 12.dp, glyphTint ?: ink, 1.9f)
+            Spacer(Modifier.width(4.dp))
+        }
+        Text(
+            text,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = ink,
+            maxLines = 1,
+            softWrap = false,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Spacer(Modifier.width(3.dp))
+        Glyph(G.CHEV_DOWN, 10.dp, ink.copy(alpha = 0.55f), 2.6f)
     }
 }
 
@@ -1264,7 +1307,11 @@ private fun TurnBubble(
         usage?.let { add(usageText(it)) }
     }.joinToString(" · ")
 
-    Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 16.dp),
+    ) {
         VendorMark(
             slug = lead.vendorSlug.ifBlank { null },
             fallbackText = lead.vendorFallback,
@@ -1282,10 +1329,16 @@ private fun TurnBubble(
                     modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
                 )
             }
+            // 这个 Box 是**不能加 .clip()** 的：
+            // 一整个 Turn（正文 + 几十张工具卡 + 思考块）都长在它里面，长会话里它能有
+            // 近 3 万像素高。一旦挂 clip，Compose 会为它建一个巨大的 graphicsLayer，
+            // 而命中测试用 layer 的裁剪范围做判定 —— 实测后果是气泡里所有子节点
+            // （工具卡头、「思考过程」、⋯ 菜单）全都点不动，只有气泡本身收得到事件，
+            // 看起来就是"点了没反应"。圆角改由 background 的形状自己画，不需要 layer；
+            // 内容有 13dp 内边距，也不会溢出圆角。
             Box(
                 Modifier
-                    .clip(RoundedCornerShape(6.dp, 18.dp, 18.dp, 18.dp))
-                    .background(pal().aiBubble),
+                    .background(pal().aiBubble, RoundedCornerShape(6.dp, 18.dp, 18.dp, 18.dp)),
             ) {
                 Column(
                     Modifier.padding(
@@ -1374,12 +1427,16 @@ private fun TurnBubble(
                         )
                     }
                 }
-                MoreButton(
-                    { r -> onMenu(target, r) },
-                    Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 5.dp, bottom = 3.dp),
-                )
+                // 这一轮还在生成时不显示「⋯」：三个点会跟着气泡底边一路往上跳，
+                // 而此刻能做的操作（复制 / 删除 / 重新生成）都还没意义 —— 等整轮结束再出现
+                if (!(vm.streaming && items.lastOrNull()?.id == lastId)) {
+                    MoreButton(
+                        { r -> onMenu(target, r) },
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 5.dp, bottom = 3.dp),
+                    )
+                }
             }
         }
     }
@@ -1388,19 +1445,6 @@ private fun TurnBubble(
 /* ─────────── 本对话产出的文件 ─────────── */
 
 private data class ProducedFile(val rel: String, val name: String)
-
-/**
- * 滚动触发签名。
- *
- * [count] 条目数、[chars] 这一轮所有消息的可见字符总数、[extras] 工具卡的结构化增量；
- * [lastRole] 用来区分"新消息"是用户发的（必须贴底）还是模型/工具的（跟随态才贴）。
- */
-private data class ScrollSig(
-    val count: Int,
-    val chars: Int,
-    val extras: Int,
-    val lastRole: String,
-)
 
 /**
  * 从工具调用的参数里挑出"真的写出了文件"的那些。
@@ -1439,8 +1483,8 @@ private fun collectProduced(msgs: List<ChatMsg>): List<ProducedFile> {
     val scope = if (lastUser >= 0) msgs.subList(lastUser + 1, msgs.size) else msgs
     for (m in scope) {
         val t = m.tool ?: continue
-        // ① 工具自己回报的产出（skill_run 把 /workspace/out 拷回工作区的那些）。
-        //    这条以前完全没有 —— 脚本生成的 PPT 就"看不见"，只因为它的路径不在参数里
+        // ① 工具自己回报的产出（以磁盘上真实存在的文件为准，不是从参数猜的）。
+        //    这条以前完全没有 —— 生成的文件就"看不见"，只因为它的路径不在参数里。
         t.artifacts.forEach { put(it) }
         // ② 参数里能推出来的写入目标（write_file / docx_fill / copy_path …）
         if (!t.ok || t.name !in fileTools) continue
@@ -1596,10 +1640,9 @@ private fun Composer(
     modelLabel: String,
     thinkingLabel: String,
     thinkingEnabled: Boolean,
-    thinkingColors: Pair<Color, Color>,
     permission: PermissionMode,
     hasModel: Boolean,
-    /** 空 = 没选工作区。没工作区时只有终端与记忆工具可用，底部要如实说明 */
+    /** 空 = 没选工作区。没工作区时只有终端与技能工具可用，底部要如实说明 */
     workspaceName: String = "",
     /** Linux 环境就绪且开关打开：即使没选工作区，agent 也能跑命令 */
     shellReady: Boolean = false,
@@ -1618,8 +1661,26 @@ private fun Composer(
     /** 非空表示当前引用了一条消息，内容为"发送者：前 40 字" */
     quoteLabel: String? = null,
     onClearQuote: () -> Unit = {},
+    /** 点底部状态行换工作区：状态行已经收进卡片，不再单独占一行 */
+    onOpenWorkspace: () -> Unit = {},
+    /** 把输入区实测高度回报给弹层用的锚点 */
+    onMeasured: (Int) -> Unit = {},
+    /** 三颗控制胶囊各自的窗口横坐标，弹层按它对齐 */
+    onChipPlaced: (Pop, Int) -> Unit = { _, _ -> },
 ) {
-    Column(modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 6.dp, bottom = 10.dp)) {
+    /** 输入框自己是否持焦点。IME 内边距只跟它走，见下面的说明 */
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        modifier
+            .onGloballyPositioned { onMeasured(it.size.height) }
+            .fillMaxWidth()
+            // 只在自己持焦点时吃 IME inset。
+            // 无条件挂 imePadding 的后果：抽屉里点搜索框，输入法一样会弹，
+            // 背景这张会话页也会跟着缩短、重排 —— 明明是另一块界面在用键盘。
+            .then(if (focused) Modifier.imePadding() else Modifier)
+            .padding(horizontal = 12.dp)
+            .padding(top = 6.dp, bottom = 10.dp)
+    ) {
 
         // 已启用的技能：贴在输入区上方一行胶囊。
         // 之前只在「+」上点了个小圆点，用户根本不知道"我现在是在按某份手册做事"；
@@ -1663,48 +1724,54 @@ private fun Composer(
             }
         }
 
-        // 三等分：宽度一致、左缘对齐，文案长短不再让它们一宽一窄地抖。
-        // 之前是"按文字撑开 + 横向滚动"，模型名一长整行就在滑，三颗永远对不齐。
+        // ── 控制条：左边是"身份"（模型），右边是"行为"（思考、权限）──
+        //
+        // 以前三颗都是饱和底色（浅蓝 / 浅蓝 / 琥珀）等宽并排：三个彩色控件谁都不是重点，
+        // 看着像临时拼在一起。现在默认全素色，**只有权限处于「允许」时才上色** ——
+        // 那是唯一一个"写文件不再问你"的持续风险，值得一直提醒；其余状态都是中性灰。
         Row(
-            Modifier.fillMaxWidth().padding(bottom = 7.dp),
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            PillChip(
+            CtrlChip(
                 text = modelLabel,
-                bg = if (hasModel) pal().modelChipBg else pal().surfaceAlt,
-                fg = if (hasModel) pal().modelChipInk else pal().muted,
-                leadingDot = if (hasModel) pal().ok else pal().faint,
-                modifier = Modifier.weight(1f),
+                width = 136.dp,
+                dot = if (hasModel) pal().ok else pal().faint,
                 onClick = { onPop(Pop.MODEL) },
+                modifier = Modifier.onGloballyPositioned {
+                    onChipPlaced(Pop.MODEL, it.positionInWindow().x.toInt())
+                },
             )
-            PillChip(
-                // "思考·关" → "思考 关"：同样的信息，少一个全角点，长档位少挤 12dp
+            Box(Modifier.padding(horizontal = 3.dp).size(1.dp, 13.dp).background(pal().line))
+            CtrlChip(
                 text = "思考 $thinkingLabel",
-                bg = if (thinkingEnabled) thinkingColors.first else pal().surfaceAlt,
-                fg = if (thinkingEnabled) thinkingColors.second else pal().muted,
-                leadingGlyph = G.SPARKLE,
-                enabled = thinkingEnabled,
-                modifier = Modifier.weight(1f),
-                onClick = { if (thinkingEnabled) onPop(Pop.THINK) },
+                width = 104.dp,
+                glyph = G.SPARKLE,
+                glyphTint = if (thinkingEnabled) pal().accent else pal().faint,
+                // 不支持思考的模型也让这颗可点：弹层里会说清"为什么没有档位"。
+                // 以前是 enabled=false 静默变灰、点了没反应，用户只会以为界面坏了。
+                onClick = { onPop(Pop.THINK) },
+                modifier = Modifier.onGloballyPositioned {
+                    onChipPlaced(Pop.THINK, it.positionInWindow().x.toInt())
+                },
             )
-            val (bg, fg) = when (permission) {
-                PermissionMode.READONLY -> pal().surfaceAlt to pal().ink
-                PermissionMode.CONFIRM -> pal().permChipBg to pal().permChipInk
-                PermissionMode.ALLOW -> pal().warnSoft to pal().warn
-            }
-            PillChip(
-                // 权限档位同样精简："全部允许"→"允许"，盾牌图标已经把语义兜住了
+            Spacer(Modifier.weight(1f))
+            CtrlChip(
                 text = when (permission) {
                     PermissionMode.READONLY -> "只读"
                     PermissionMode.CONFIRM -> "需确认"
                     PermissionMode.ALLOW -> "允许"
                     else -> permission.label
                 },
-                bg = bg,
-                fg = fg,
-                leadingGlyph = G.SHIELD,
-                modifier = Modifier.weight(1f),
+                width = 108.dp,
+                glyph = G.SHIELD,
+                glyphTint = if (permission == PermissionMode.ALLOW) pal().warn else pal().muted,
+                bg = if (permission == PermissionMode.ALLOW) pal().warnSoft else Color.Transparent,
+                fg = if (permission == PermissionMode.ALLOW) pal().warn else pal().muted,
                 onClick = { onPop(Pop.PERMIT) },
+                modifier = Modifier.onGloballyPositioned {
+                    onChipPlaced(Pop.PERMIT, it.positionInWindow().x.toInt())
+                },
             )
         }
 
@@ -1794,7 +1861,9 @@ private fun Composer(
                     textStyle = ty().body,
                     cursorBrush = SolidColor(pal().accent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { focused = it.isFocused },
                     // 占位文字必须和正文共用**同一个 TextStyle**。
                     // 之前它只给了 fontSize = 14.5.sp，没有 ty().body 的 23sp 行高：
                     // 空输入时光标按 23sp 的行盒从顶端画，占位文字却按默认行高（约 17sp）居中，
@@ -1813,91 +1882,56 @@ private fun Composer(
 
             Spacer(Modifier.width(9.dp))
 
+            // 空输入时降级成描边禁用态：以前不管有没有内容都是实心蓝，
+            // "能不能发"看不出来，蓝色也被稀释成一个普通装饰。
+            val canSend = hasModel && (streaming || input.isNotBlank())
             Box(
                 Modifier
                     .size(32.dp)
                     .clip(CircleShape)
-                    .background(if (hasModel) pal().accent else pal().surfaceAlt)
-                    .clickable { if (streaming) onStop() else onSend() },
+                    .background(if (canSend) pal().accent else Color.Transparent)
+                    .border(1.dp, if (canSend) Color.Transparent else pal().line, CircleShape)
+                    .clickable(enabled = canSend) { if (streaming) onStop() else onSend() },
                 contentAlignment = Alignment.Center,
             ) {
                 // 禁用态不能沿用 onAccent：深色主题下 onAccent 是深墨蓝，落在近黑底上看不见
-                val sendFg = if (hasModel) pal().onAccent else pal().muted
+                val sendFg = if (canSend) pal().onAccent else pal().faint
                 if (streaming) Glyph(G.STOP, 14.dp, sendFg, 2.2f)
                 else Glyph(G.ARROW_UP, 16.dp, sendFg, 2.4f)
             }
             }
-        }
 
-        Row(
-            Modifier.fillMaxWidth().padding(top = 8.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                if (workspaceName.isBlank()) "未选工作区" else "工作区 · $workspaceName",
-                style = ty().micro,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 130.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Box(Modifier.size(1.dp, 9.dp).background(pal().line))
-            Spacer(Modifier.width(6.dp))
-            Text(
-                when {
-                    !hasModel -> "先添加模型"
+            // 状态行收进卡片右下角：少一层横条，点一下还能直接换工作区。
+            // 以前它单独占一行居中灰字，既占高，又和上面的控制条抢注意力。
+            Row(
+                Modifier.fillMaxWidth().padding(top = 5.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val (label, tint) = when {
+                    !hasModel -> "先添加模型" to pal().hint
                     // 没选工作区但有终端：文件工具不发，run_shell 照常可用。
-                    // 这里写"工具不可用"会让用户以为 agent 什么都不会做，实际它能跑命令。
-                    workspaceName.isBlank() && shellReady -> "终端可用"
-                    workspaceName.isBlank() -> "工具不可用"
-                    permission == PermissionMode.READONLY -> "只读，不能改文件"
-                    else -> "可读写文件"
-                },
-                style = ty().micro,
-            )
+                    // 写"工具不可用"会让人以为 agent 什么都不会做，实际它能跑命令。
+                    workspaceName.isBlank() && shellReady ->
+                        "选择工作区 · 终端可用" to pal().warn
+                    workspaceName.isBlank() -> "选择工作区 · 才能读写文件" to pal().warn
+                    permission == PermissionMode.READONLY -> "$workspaceName · 只读" to pal().hint
+                    else -> "$workspaceName · 可读写" to pal().hint
+                }
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .clickable(onClick = onOpenWorkspace)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Glyph(G.FOLDER, 10.dp, tint, 1.7f)
+                    Spacer(Modifier.width(4.dp))
+                    Text(label, fontSize = 10.sp, color = tint, maxLines = 1)
+                }
+            }
         }
     }
-}
-
-/**
- * 思考档位的四段色阶：灰 → 青 → 蓝 → 琥珀。
- *
- * 单一灰色表达不出"我现在开的是最大档"，而档位直接影响响应速度和费用，
- * 需要一眼能分出强弱。四段是上限：再多颜色就记不住了。
- */
-private data class ThinkTier(val bg: Color, val bgDark: Color, val fg: Color, val fgDark: Color)
-
-private val THINK_TIERS = listOf(
-    // 关 / 最小
-    ThinkTier(Color(0xFFF1F3F6), Color(0xFF141414), Color(0xFF5F6368), Color(0xFFA3A3A3)),
-    // 低
-    ThinkTier(Color(0xFFE2F3EF), Color(0xFF122A26), Color(0xFF1B6B5F), Color(0xFF7FD1C1)),
-    // 中
-    ThinkTier(Color(0xFFE8F0FE), Color(0xFF1E2C3D), Color(0xFF12508F), Color(0xFFAECBFA)),
-    // 高 / 最高
-    ThinkTier(Color(0xFFFDF1DE), Color(0xFF2E2415), Color(0xFF8A5200), Color(0xFFE0B15C)),
-)
-
-/**
- * 当前档位落在哪一段。
- * 两档模型（如小米的开/关）里"开"不该顶到最重的琥珀色，按"中"处理；
- * 三档以上按索引等比映射，七档的 Agnes 也不会出现六个不同颜色的混乱。
- */
-private fun thinkSlot(levelCount: Int, index: Int): Int = when {
-    levelCount <= 1 -> 0
-    levelCount == 2 -> if (index == 0) 0 else 2
-    else -> (index * 3) / (levelCount - 1)
-}
-
-@Composable
-private fun thinkChipColors(model: ModelProfile?, levelId: String?): Pair<Color, Color> {
-    if (model == null || model.thinkingLevels.isEmpty()) {
-        return pal().surfaceAlt to pal().muted
-    }
-    val idx = model.thinkingLevels.indexOfFirst { it.id == levelId }.coerceAtLeast(0)
-    val t = THINK_TIERS[thinkSlot(model.thinkingLevels.size, idx)]
-    return (if (pal().isDark) t.bgDark else t.bg) to (if (pal().isDark) t.fgDark else t.fg)
 }
 
 private fun thinkingLabel(model: ModelProfile?, vm: AppViewModel): String {
@@ -1908,214 +1942,214 @@ private fun thinkingLabel(model: ModelProfile?, vm: AppViewModel): String {
 
 // ───────────────── 弹出层 ─────────────────
 
+/**
+ * 顶栏 ⋯ 的菜单：这段会话能做的动作都在这里。
+ *
+ * 全是**已有**动作，只是把散落在抽屉长按、顶栏胶囊里的入口收到一处：
+ * 顶栏因此只剩「☰ + 标题 + ⋯」，也不会再出现第二个"＋"和输入框的加号打架。
+ */
+@Composable
+private fun SessionMenu(
+    hasWorkspace: Boolean,
+    onNewChat: () -> Unit,
+    onOpenSessions: () -> Unit,
+    onDetachWorkspace: () -> Unit,
+    onExport: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Column {
+        PopoverHead("这段会话")
+        MenuRow(G.PLUS, "新对话", onNewChat)
+        MenuRow(G.MENU, "切换会话", onOpenSessions)
+        MenuRow(G.ARROW_DOWN, "导出会话（Markdown）", onExport)
+        if (hasWorkspace) {
+            MenuRow(G.FOLDER, "解除工作区绑定", onDetachWorkspace)
+            Hairline(Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+        }
+        MenuRow(G.TRASH, "删除这段会话", onDelete, danger = true)
+    }
+}
+
+@Composable
+private fun MenuRow(glyph: G, text: String, onClick: () -> Unit, danger: Boolean = false) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Glyph(glyph, 15.dp, if (danger) pal().bad else pal().muted, 1.9f)
+        Spacer(Modifier.width(10.dp))
+        Text(text, fontSize = 13.5.sp, color = if (danger) pal().bad else pal().ink)
+    }
+}
+
 @Composable
 private fun ModelPopover(vm: AppViewModel, onGoModels: () -> Unit, onClose: () -> Unit) {
     val all = vm.chatModelsWithProvider()
     val current = vm.state.value.selectedModelId
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     Column {
-        PopoverHead(
-            if (all.isEmpty()) "还没有添加任何模型"
-            else "切换模型 · 右侧是思考档位数"
-        )
-        val ctx = androidx.compose.ui.platform.LocalContext.current
-        all.take(6).forEach { (p, m) ->
-            val sel = m.id == current
-            val def = remember(p.catalogId) { Catalog.find(ctx, p.catalogId) }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(if (sel) pal().accentSoft else Color.Transparent)
-                    .clickable { vm.select(m.id); onClose() }
-                    .padding(start = 8.dp, end = 9.dp, top = 7.dp, bottom = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PopoverRadio(sel)
-                Spacer(Modifier.width(7.dp))
-                // 厂商图标：一眼分清是哪家，比看一串 URL 快得多
-                VendorMark(
-                    slug = def?.icon?.ifBlank { null },
-                    // 自定义厂商在目录里查不到，退回名字首字，别留一个空方块
-                    fallbackText = def?.fallbackText?.takeIf { it.isNotBlank() }
-                        ?: p.displayName.take(1).uppercase(),
-                    fallbackColor = parseHex(def?.fallbackColor ?: "#5F6368"),
-                    dim = 26.dp,
-                    glyphDim = 15.dp,
-                    round = false,
-                    showBorder = false,
-                )
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        p.displayName,
-                        fontSize = 12.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = pal().ink,
-                        maxLines = 1,
-                    )
-                    Text(
-                        m.modelId,
-                        style = ty().monoId,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                }
-                Spacer(Modifier.width(6.dp))
-                val tiers = m.thinkingLevels.size
-                // 选中行本身是 accentSoft 底，档位标签再用 accentSoft 就"化"进背景里，
-                // 看起来像边框被抹掉了。选中态改成白卡片 + 强调色细描边，跟行底拉开层次。
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (sel) pal().card else pal().surfaceAlt)
-                        .border(
-                            1.dp,
-                            if (sel) pal().accent.copy(alpha = 0.35f) else Color.Transparent,
-                            RoundedCornerShape(6.dp),
-                        )
-                        .padding(horizontal = 6.dp, vertical = 2.5.dp)
-                ) {
-                    Text(
-                        if (tiers == 0) "无档位" else "思考 $tiers 档",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (sel) pal().accentInk else pal().muted,
-                    )
-                }
-            }
-        }
+        PopoverHead("选择模型")
         if (all.isEmpty()) {
-            // 空态不能只给一句话：用户点开这个弹窗就是为了选模型，必须给一条直达路径
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(pal().accent)
-                    .clickable(onClick = onGoModels)
-                    .padding(vertical = 11.dp),
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    "去添加模型",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = pal().onAccent,
-                )
-            }
-        } else if (all.size > 6) {
-            Text(
-                "还有 ${all.size - 6} 个模型，去「模型」页查看全部",
-                style = ty().micro,
-                modifier = Modifier.padding(start = 10.dp, top = 4.dp),
+            PopoverItem(
+                title = "还没有添加模型",
+                subtitle = "点这里去添加，添加完就能在这里切换",
+                selected = false,
+                onClick = onGoModels,
+                icon = { Glyph(G.PLUS, 15.dp, pal().accent, 2f) },
             )
+        } else {
+            // 可滚动：以前只列前 6 个，多出来的给一行"还有 N 个"的死路，
+            // 用户点完还得再跳一次页面才能选到
+            Column(
+                Modifier
+                    .heightIn(max = 300.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                all.forEach { (p, m) ->
+                    val sel = m.id == current
+                    val def = remember(p.catalogId) { Catalog.find(ctx, p.catalogId) }
+                    val levels = m.thinkingLevels
+                    PopoverItem(
+                        title = m.displayName.ifBlank { m.modelId },
+                        // 后果写在行里：切到不支持思考的模型会把档位关掉，
+                        // 以前这句话只出现在弹层底部 10sp 的小字里，选完才看见
+                        subtitle = buildString {
+                            // 显示名和 modelId 一样时别再重复一遍（多数自定义模型就是这样）
+                            if (m.displayName.isNotBlank() && m.displayName != m.modelId) {
+                                append(m.modelId).append(" · ")
+                            }
+                            if (levels.isEmpty()) append("不支持思考")
+                            else {
+                                append("思考 ${levels.size} 档")
+                                if (!sel) append(" · 切换重置")
+                            }
+                        },
+                        warnSubtitle = levels.isEmpty() && !sel,
+                        selected = sel,
+                        onClick = { vm.select(m.id); onClose() },
+                        icon = {
+                            VendorMark(
+                                slug = def?.icon?.ifBlank { null },
+                                fallbackText = def?.fallbackText?.takeIf { it.isNotBlank() }
+                                    ?: p.displayName.take(1).uppercase(),
+                                fallbackColor = parseHex(def?.fallbackColor ?: "#5F6368"),
+                                dim = 18.dp,
+                                glyphDim = 11.dp,
+                                round = false,
+                                showBorder = false,
+                            )
+                        },
+                    )
+                }
+            }
+            Hairline(Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+            MenuRow(G.SETTINGS, "管理模型", onGoModels)
         }
-        Text(
-            "切换后思考档位与工具能力按新模型重置",
-            fontSize = 10.sp,
-            color = pal().faint,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 4.dp),
-        )
     }
 }
 
 @Composable
 private fun ThinkPopover(vm: AppViewModel, onClose: () -> Unit) {
-    val model = vm.selectedModel() ?: return
-    val levels = model.thinkingLevels
-    if (levels.isEmpty()) return
-    val currentId = vm.currentThinkingLevel(model)
-
+    val model = vm.selectedModel()
+    val levels = model?.thinkingLevels.orEmpty()
+    val currentId = model?.let { vm.currentThinkingLevel(it) }
     Column {
-        PopoverHead("思考程度 · ${model.displayName} 支持 ${levels.size} 档")
-
-        levels.forEachIndexed { idx, lvl ->
-            val sel = lvl.id == currentId
-            val slot = THINK_TIERS[thinkSlot(levels.size, idx)]
-            val dot = if (pal().isDark) slot.fgDark else slot.fg
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(if (sel) pal().accentSoft else Color.Transparent)
-                    .clickable {
-                        vm.setThinking(model.id, lvl.id)
+        PopoverHead(if (levels.isEmpty()) "思考程度" else "思考程度 · ${levels.size} 档")
+        if (levels.isEmpty()) {
+            // 不支持思考的模型也把弹层打开：说清"为什么没有档位"，
+            // 比让胶囊静默变灰、点了没反应要好
+            PopoverItem(
+                title = "当前模型不支持思考",
+                subtitle = "换一个支持思考的模型后，这里会出现档位",
+                selected = false,
+                onClick = onClose,
+                icon = { Glyph(G.SPARKLE, 15.dp, pal().faint, 1.8f) },
+            )
+        } else {
+            levels.forEachIndexed { idx, lvl ->
+                val sel = lvl.id == currentId
+                PopoverItem(
+                    title = lvl.label,
+                    subtitle = thinkHint(levels.size, idx),
+                    selected = sel,
+                    onClick = {
+                        model?.let { vm.setThinking(it.id, lvl.id) }
                         onClose()
-                    }
-                    .padding(horizontal = 9.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PopoverRadio(sel)
-                Spacer(Modifier.width(10.dp))
-                // 档位色点：同一套色阶，列表里也能一眼分出强弱
-                Box(
-                    Modifier
-                        .size(7.dp)
-                        .clip(androidx.compose.foundation.shape.CircleShape)
-                        .background(dot)
+                    },
+                    icon = { ThinkBars(levels.size, idx, sel) },
                 )
-                Spacer(Modifier.width(9.dp))
-                Text(
-                    lvl.label,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = pal().ink,
-                )
-                Spacer(Modifier.weight(1f))
-                Text(lvl.param, style = ty().monoId)
             }
+            PopoverFoot("档位越高越慢越贵；不支持的档位不会出现")
         }
-
-        Text(
-            "档位由模型能力决定，不支持的档位不会出现；切换后立即生效",
-            fontSize = 10.sp,
-            lineHeight = 14.sp,
-            color = pal().faint,
-            modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 4.dp),
-        )
     }
 }
 
+/** 档位效果的"人话"：把 high / 1024 这类实现参数换成用户能判断的取舍 */
+private fun thinkHint(total: Int, idx: Int): String = when {
+    total <= 1 -> "由模型决定"
+    idx == 0 -> "最快，不花思考 token"
+    idx == total - 1 -> "更慢更贵，复杂推理更稳"
+    else -> "默认，速度与深度平衡"
+}
 
+/** 1–3 格强度条：比四段彩点好读，也不会在七档模型上变成调色盘 */
+@Composable
+private fun ThinkBars(total: Int, idx: Int, active: Boolean) {
+    val bars = total.coerceIn(1, 3)
+    val filled = if (total <= 1) bars else {
+        (idx.toFloat() / (total - 1) * bars + 0.6f).toInt().coerceIn(1, bars)
+    }
+    val tint = when {
+        !active -> pal().faint
+        idx == 0 -> pal().faint
+        else -> pal().accent
+    }
+    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        repeat(bars) { i ->
+            Box(
+                Modifier
+                    .width(3.dp)
+                    .height((6 + i * 3).dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(if (i < filled) tint else pal().lineSoft)
+            )
+        }
+    }
+}
 
 @Composable
 private fun PermitPopover(vm: AppViewModel, onClose: () -> Unit) {
     val cur = vm.permission()
-    val items = listOf(
-        Triple(PermissionMode.READONLY, "只读", "只能读与搜。写、删、移动工具直接从工具表移除"),
-        Triple(PermissionMode.CONFIRM, "需确认", "写入与删除每次都弹确认并展示 diff"),
-        Triple(PermissionMode.ALLOW, "全部允许", "写与删自动执行。仍先拍快照，可在对话里逐次撤销"),
-    )
     Column {
-        PopoverHead("访问权限 · 仅作用于当前会话")
-        items.forEach { (mode, title, desc) ->
-            val sel = mode == cur
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(if (sel) pal().accentSoft else Color.Transparent)
-                    .clickable { vm.setPermission(mode); onClose() }
-                    .padding(horizontal = 9.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                Box(Modifier.padding(top = 1.dp)) { PopoverRadio(sel) }
-                Spacer(Modifier.width(9.dp))
-                Column {
-                    Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = pal().ink)
-                    Text(desc, fontSize = 10.5.sp, lineHeight = 15.sp, color = pal().hint)
-                }
-            }
-        }
-        Text(
-            "越界路径、备份失败、文件被外部改动，这三种情况即使「全部允许」也硬拦截",
-            fontSize = 10.sp,
-            lineHeight = 15.sp,
-            color = pal().faint,
-            modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 4.dp),
+        PopoverHead("访问权限 · 仅当前会话")
+        PopoverItem(
+            title = "只读",
+            subtitle = "只能读与搜，改文件类工具不会出现",
+            selected = cur == PermissionMode.READONLY,
+            onClick = { vm.setPermission(PermissionMode.READONLY); onClose() },
+            icon = { Glyph(G.SHIELD, 15.dp, pal().muted, 1.6f) },
         )
+        PopoverItem(
+            title = "需确认",
+            subtitle = "每次写入都给你看 diff",
+            selected = cur == PermissionMode.CONFIRM,
+            onClick = { vm.setPermission(PermissionMode.CONFIRM); onClose() },
+            icon = { Glyph(G.SHIELD, 15.dp, pal().accent, 1.6f) },
+        )
+        PopoverItem(
+            title = "全部允许",
+            subtitle = "写入不再询问，只能靠撤销回退",
+            warnSubtitle = true,
+            selected = cur == PermissionMode.ALLOW,
+            onClick = { vm.setPermission(PermissionMode.ALLOW); onClose() },
+            icon = { Glyph(G.WARN, 15.dp, pal().warn, 1.6f) },
+        )
+        PopoverFoot("越界路径与备份失败仍会硬拦")
     }
 }
 
@@ -2400,23 +2434,17 @@ internal fun DrawerPanel(
     onExport: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
-    /** 「⋯」菜单：只有导出和清空这两件事，作用域都是"当前这段会话" */
-    var menuOpen by remember { mutableStateOf(false) }
+    /** 筛选片是否展开（默认收起，免得把会话列表顶下去） */
+    var filterOpen by remember { mutableStateOf(false) }
+    /** all / plain / workspace / week —— 与筛选片一一对应 */
+    var filter by remember { mutableStateOf("all") }
+    /**
+     * 分组折叠状态。以前只有两组、存在 VM 里；现在多了「今天 / 更早」，
+     * 就地保存即可 —— 抽屉是常驻图层，关掉再拉开状态还在。
+     */
+    var collapsedKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
     val lineColor = pal().line
     val density = androidx.compose.ui.platform.LocalDensity.current
-
-    /**
-     * 搜索行底边到抽屉根的高度。
-     *
-     * 弹层要贴在搜索框正下方。这个位置 = 状态栏 + 品牌区 + 新会话 + 搜索 四段之和，
-     * 写死一个 dp 会随字体缩放和状态栏高度漂；量一次最稳。
-     */
-    var searchBottomPx by remember { mutableStateOf(0f) }
-
-    // 抽屉收起时顺手关掉菜单：否则下次拉出来，上次没收的弹层还挂在那儿
-    androidx.compose.runtime.LaunchedEffect(drawerOpen) {
-        if (!drawerOpen) menuOpen = false
-    }
 
     Box(
         Modifier
@@ -2486,7 +2514,9 @@ internal fun DrawerPanel(
 
             Spacer(Modifier.height(10.dp))
 
-            // 搜索：真输入框。尾部那个「⋯」是当前会话的操作入口（导出 / 清空）
+            // 搜索 + 筛选：右侧那颗从「当前会话的 ⋯」换成筛选开关。
+            // 导出/清空是会话动作，已经收进顶栏 ⋯ 菜单 —— 同一个位置不该同时表示
+            // "搜索的选项"和"会话的动作"。
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -2494,9 +2524,6 @@ internal fun DrawerPanel(
                     .height(38.dp)
                     .clip(RoundedCornerShape(50))
                     .background(pal().surfaceAlt)
-                    .onGloballyPositioned { c ->
-                        searchBottomPx = c.positionInParent().y + c.size.height
-                    }
                     .padding(start = 13.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -2504,7 +2531,7 @@ internal fun DrawerPanel(
                 Spacer(Modifier.width(8.dp))
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                     if (query.isEmpty()) {
-                        Text("搜索会话", fontSize = 13.5.sp, color = pal().hint)
+                        Text("搜索标题与正文", fontSize = 13.5.sp, color = pal().hint)
                     }
                     BasicTextField(
                         value = query,
@@ -2528,34 +2555,80 @@ internal fun DrawerPanel(
                             .background(pal().line.copy(alpha = 0.55f))
                             .clickable { query = "" },
                         contentAlignment = Alignment.Center,
-                    ) {
-                        Glyph(G.CLOSE, 10.dp, pal().muted, 2.2f)
-                    }
+                    ) { Glyph(G.CLOSE, 10.dp, pal().muted, 2.2f) }
                 }
                 Spacer(Modifier.width(4.dp))
                 Box(
                     Modifier
                         .size(24.dp)
                         .clip(CircleShape)
-                        .clickable { menuOpen = !menuOpen },
+                        .clickable { filterOpen = !filterOpen },
                     contentAlignment = Alignment.Center,
                 ) {
-                    // 开着的时候用强调色：让"菜单是从这儿弹出来的"有明确指向，
-                    // 否则点完弹层盖住了列表，用户找不到是哪个按钮开的
-                    Glyph(G.MORE, 15.dp, if (menuOpen) pal().accent else pal().hint, 2f)
+                    // 有筛选条件时保持强调色：收起来也知道"现在不是看全部"
+                    Glyph(
+                        G.SLIDERS, 15.dp,
+                        if (filterOpen || filter != "all") pal().accent else pal().hint, 2f,
+                    )
+                }
+            }
+
+            // 筛选片：默认收起，否则三行小胶囊把会话列表顶下去
+            if (filterOpen) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = 14.dp, top = 8.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    listOf(
+                        "all" to "全部",
+                        "plain" to "普通",
+                        "workspace" to "工作区",
+                        "week" to "最近 7 天",
+                    ).forEach { (key, label) ->
+                        val on = filter == key
+                        Text(
+                            label,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (on) pal().accentInk else pal().muted,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(if (on) pal().accentSoft else pal().surfaceAlt)
+                                .clickable { filter = key }
+                                .padding(horizontal = 9.dp, vertical = 4.dp),
+                        )
+                    }
                 }
             }
 
             // 搜索词同时匹配标题与正文，避免"记得聊过但忘了标题"时搜不到
             val q = query.trim()
-            // 「普通会话」与「工作区」各自成组，组内独立按最近收发倒序。
-            // 排序不依赖存储里数组的顺序：即便某次落盘顺序有偏差，看到的也永远是最新在最上面
-            val groups = remember(sessions, q) {
-                val base = if (q.isBlank()) sessions
+            val weekCut = System.currentTimeMillis() - 7L * 86_400_000
+            // 分组顺序 = 今天 → 更早 → 工作区：时间维度回到第一层，
+            // 找"昨天那件事"不用先翻完整个普通会话组
+            val groups = remember(sessions, q, filter) {
+                val hits = if (q.isBlank()) sessions
                 else sessions.filter { s ->
                     s.title.contains(q, true) || s.messages.any { it.text.contains(q, true) }
                 }
-                base.groupedByRecent()
+                val base = when (filter) {
+                    "plain" -> hits.filter { !it.inWorkspace }
+                    "workspace" -> hits.filter { it.inWorkspace }
+                    "week" -> hits.filter { it.updatedAt >= weekCut }
+                    else -> hits
+                }
+                val ws = base.filter { it.inWorkspace }.sortedByDescending { it.updatedAt }
+                val plain = base.filter { !it.inWorkspace }.sortedByDescending { it.updatedAt }
+                val (today, older) = plain.partition { isSameDayMs(it.updatedAt, System.currentTimeMillis()) }
+                buildList {
+                    if (today.isNotEmpty()) add(Triple("today", "今天", today))
+                    if (older.isNotEmpty()) add(Triple("older", "更早", older))
+                    if (ws.isNotEmpty()) add(Triple("ws", "工作区", ws))
+                }
             }
 
             Spacer(Modifier.height(6.dp))
@@ -2565,25 +2638,33 @@ internal fun DrawerPanel(
                     Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
                 ) {
                     Text(
-                        if (q.isBlank()) "还没有历史会话" else "没有匹配「$q」的会话",
+                        if (q.isBlank() && filter == "all") "还没有历史会话"
+                        else if (q.isNotBlank()) "没有匹配「$q」的会话"
+                        else "这个筛选下没有会话",
                         style = ty().caption,
                     )
                 }
                 Spacer(Modifier.weight(1f))
             } else {
                 LazyColumn(Modifier.weight(1f)) {
-                    groups.forEach { (group, rows) ->
+                    groups.forEach { (groupKey, label, rows) ->
                         // 搜索时把列表当成"平铺的命中结果"：一律展开，也不提供折叠
                         val collapsible = q.isBlank()
-                        val collapsed = collapsible && group in collapsedGroups
-                        item(key = "h-${group.name}") {
+                        val collapsed = collapsible && groupKey in collapsedKeys
+                        item(key = "h-$groupKey") {
                             SessionGroupHeader(
-                                label = group.label,
-                                hint = rows.singleWorkspaceName(),
+                                label = label,
+                                hint = if (groupKey == "ws") rows.singleWorkspaceName() else null,
                                 count = rows.size,
                                 collapsed = collapsed,
                                 collapsible = collapsible,
-                                onToggle = { onToggleGroup(group) },
+                                onToggle = {
+                                    collapsedKeys = if (groupKey in collapsedKeys) {
+                                        collapsedKeys - groupKey
+                                    } else {
+                                        collapsedKeys + groupKey
+                                    }
+                                },
                             )
                         }
                         if (!collapsed) {
@@ -2591,6 +2672,10 @@ internal fun DrawerPanel(
                                 SessionRow(
                                     title = s.title.ifBlank { "新会话" },
                                     time = sessionTime(s.updatedAt),
+                                    // 第二行带上"用什么模型聊的"，同批会话才分得清
+                                    model = s.messages.lastOrNull { it.role == "assistant" }
+                                        ?.modelLabel.orEmpty(),
+                                    folder = if (s.inWorkspace) s.workspaceName else "",
                                     active = s.id == currentSessionId,
                                     onClick = { onOpenSession(s.id) },
                                     onLongClick = { onRequestDelete(s.id, s.title.ifBlank { "新会话" }) },
@@ -2611,45 +2696,6 @@ internal fun DrawerPanel(
             Spacer(Modifier.height(6.dp))
         }
 
-        if (menuOpen) {
-            // 空白处点一下只收菜单，不关抽屉 —— 和 scrim 的既有约定保持一致
-            // （只有 X 和返回手势能关抽屉）
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                        indication = null,
-                        onClick = { menuOpen = false },
-                    )
-            )
-            // 宽度收到 190dp：322dp 的默认弹层会顶出 302dp 的抽屉
-            PopoverSurface(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(start = 14.dp, end = 14.dp, top = with(density) { searchBottomPx.toDp() } + 4.dp),
-                width = 190.dp,
-            ) {
-                DrawerActionItem(
-                    icon = G.ARROW_DOWN,
-                    tint = pal().accent,
-                    title = "导出会话",
-                    trailing = "Markdown",
-                ) {
-                    menuOpen = false
-                    onExport()
-                }
-                DrawerActionItem(
-                    icon = G.TRASH,
-                    tint = pal().bad,
-                    title = "清空当前会话",
-                    danger = true,
-                ) {
-                    menuOpen = false
-                    onRequestClear()
-                }
-            }
-        }
     }
 }
 
@@ -2777,6 +2823,10 @@ private fun List<com.pocketagent.app.data.Session>.singleWorkspaceName(): String
 private fun SessionRow(
     title: String,
     time: String,
+    /** 这段会话用哪个模型聊的（取自最后一条回复），空则不显示 */
+    model: String,
+    /** 工作区会话的目录名，普通会话为空 */
+    folder: String,
     active: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -2788,9 +2838,21 @@ private fun SessionRow(
             .clip(RoundedCornerShape(12.dp))
             .background(if (active) pal().accentSoft else Color.Transparent)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 12.dp, vertical = 9.dp),
+            .padding(start = if (active) 9.dp else 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // 当前会话左侧 2.5dp 强调竖条：和设置页分组、弹层选中项用同一套语言，
+        // 不用再靠"底色深浅"去猜哪条是当前
+        if (active) {
+            Box(
+                Modifier
+                    .width(2.5.dp)
+                    .height(26.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(pal().accent)
+            )
+            Spacer(Modifier.width(8.dp))
+        }
         Column(Modifier.weight(1f)) {
             Text(
                 title,
@@ -2800,11 +2862,41 @@ private fun SessionRow(
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
-            if (time.isNotBlank()) {
-                Text(time, style = ty().caption, modifier = Modifier.padding(top = 1.dp))
+            // 第二行：目录 · 模型 · 时间。以前只有时间，同一批会话在列表里长得一模一样
+            val meta = buildList {
+                if (folder.isNotBlank()) add(folder)
+                if (model.isNotBlank()) add(model)
+                if (time.isNotBlank()) add(time)
+            }
+            if (meta.isNotEmpty()) {
+                Row(
+                    Modifier.padding(top = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (folder.isNotBlank()) {
+                        Glyph(G.FOLDER, 9.dp, pal().faint, 1.6f)
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(
+                        meta.joinToString(" · "),
+                        fontSize = 10.sp,
+                        color = pal().faint,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
+}
+
+/** 同一天（按设备本地时区），用于把会话分成「今天 / 更早」 */
+private fun isSameDayMs(a: Long, b: Long): Boolean {
+    if (a <= 0L) return false
+    val ca = java.util.Calendar.getInstance().apply { timeInMillis = a }
+    val cb = java.util.Calendar.getInstance().apply { timeInMillis = b }
+    return ca.get(java.util.Calendar.YEAR) == cb.get(java.util.Calendar.YEAR) &&
+        ca.get(java.util.Calendar.DAY_OF_YEAR) == cb.get(java.util.Calendar.DAY_OF_YEAR)
 }
 
 /** 会话时间的口语化写法：今天只说"几分钟前"，跨年才补年份 */private fun sessionTime(ts: Long): String {
@@ -2937,38 +3029,6 @@ private fun DrawerRow(
                 modifier = Modifier.widthIn(max = 96.dp),
             )
         }
-    }
-}
-
-/**
- * 真正滚到最底部。
- *
- * 只调 scrollToItem(lastIndex) 是不够的：它保证的只是"最后一条的**顶部**贴到视口顶部"。
- * 当最后一条比屏幕还高时（长回复很常见），页面会停在这条消息的中间 ——
- * 表现就是"明明在会话底部，键盘弹起后却没到底；点『回到底部』也回不去，手动再滑一下才行"。
- *
- * 所以在定位到最后一条之后，再用一个足够大的 scrollBy 把剩下的距离补完：
- * scrollBy 会被滚动范围截断，不会越界，正好停在真正的底部。
- */
-private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToVeryBottom() {
-    // 首帧时列表还没测量过，layoutInfo.totalItemsCount 是 0。
-    // 以前这里直接 return，于是「启动后进入当前会话」「切换会话」这两种情况
-    // 一次都没滚成 —— 列表停在最后一条的**顶部**（长回复看着就像停在中间），
-    // 要等用户自己滑一下才到底。这里改成等第一次测量完成再动手。
-    // 加超时兜底：消息为空时 LazyColumn 根本没被组合，别把协程一直挂着。
-    if (layoutInfo.totalItemsCount == 0) {
-        withTimeoutOrNull(2_000) {
-            snapshotFlow { layoutInfo.totalItemsCount }.first { it > 0 }
-        }
-    }
-    val total = layoutInfo.totalItemsCount
-    if (total == 0) return
-    // 两步各做一次，最多两轮：内容在同一帧继续变高（逐字、工具卡展开）时，
-    // 第一次 scrollBy 只能滚到"当时算出来的底部"，差的那一截会让用户以为没跟到底
-    repeat(2) {
-        scrollToItem(layoutInfo.totalItemsCount - 1)
-        scrollBy(400_000f)
-        if (!canScrollForward) return
     }
 }
 

@@ -91,36 +91,43 @@ class WorkspaceFs(private val ctx: Context, val treeUri: Uri) {
     private fun docUriOf(docId: String): Uri =
         DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
 
-    /** 列出某目录的直接子项。dirDocId 为空表示工作区根 */
-    private fun rawChildren(dirDocId: String): List<Entry> {
+    /**
+     * 列出某目录的直接子项，**失败会抛异常**（授权失效是 SecurityException）。
+     *
+     * 调用方必须自己决定怎么处理：[rawChildren] 是"读不到就当空"的旧语义，
+     * 但那条语义害过人 —— 授权被回收时界面会说"文件已经不在了"。
+     */
+    private fun queryChildren(dirDocId: String): List<Entry> {
         val id = dirDocId.ifBlank { rootDocId }
         val out = ArrayList<Entry>()
-        runCatching {
-            ctx.contentResolver.query(childUriOf(id), projection, null, null, null)?.use { c ->
-                val iId = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                val iName = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                val iMime = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
-                val iSize = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
-                val iTime = c.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-                while (c.moveToNext()) {
-                    val docId = if (iId >= 0) c.getString(iId) else continue
-                    val name = if (iName >= 0) c.getString(iName).orEmpty() else ""
-                    val mime = if (iMime >= 0) c.getString(iMime).orEmpty() else ""
-                    out.add(
-                        Entry(
-                            name = Normalizer.normalize(name, Normalizer.Form.NFC),
-                            docId = docId,
-                            uri = docUriOf(docId),
-                            isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR,
-                            size = if (iSize >= 0 && !c.isNull(iSize)) c.getLong(iSize) else -1L,
-                            mtime = if (iTime >= 0 && !c.isNull(iTime)) c.getLong(iTime) else 0L,
-                        )
+        ctx.contentResolver.query(childUriOf(id), projection, null, null, null)?.use { c ->
+            val iId = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val iName = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val iMime = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val iSize = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+            val iTime = c.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            while (c.moveToNext()) {
+                val docId = if (iId >= 0) c.getString(iId) else continue
+                val name = if (iName >= 0) c.getString(iName).orEmpty() else ""
+                val mime = if (iMime >= 0) c.getString(iMime).orEmpty() else ""
+                out.add(
+                    Entry(
+                        name = Normalizer.normalize(name, Normalizer.Form.NFC),
+                        docId = docId,
+                        uri = docUriOf(docId),
+                        isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR,
+                        size = if (iSize >= 0 && !c.isNull(iSize)) c.getLong(iSize) else -1L,
+                        mtime = if (iTime >= 0 && !c.isNull(iTime)) c.getLong(iTime) else 0L,
                     )
-                }
+                )
             }
         }
         return out
     }
+
+    /** 列出某目录的直接子项；读失败就返回空（内部算法用，界面不要用它判断"有没有"） */
+    private fun rawChildren(dirDocId: String): List<Entry> =
+        runCatching { queryChildren(dirDocId) }.getOrDefault(emptyList())
 
     fun rootEntry(): Entry {
         val name = runCatching {
@@ -154,6 +161,93 @@ class WorkspaceFs(private val ctx: Context, val treeUri: Uri) {
         }
         return cur
     }
+
+    /**
+     * 打开产出文件时用的解析结果。
+     *
+     * 存在的意义：**把"读不到"和"没有"分开**。以前这两种都返回 null，
+     * 于是授权失效会被说成"文件已经不在了"（用户明明能在文件管理器里看到它）。
+     */
+    sealed class Lookup {
+        data class Found(val entry: Entry) : Lookup()
+        object NotFound : Lookup()
+        data class Denied(val message: String) : Lookup()
+        data class Failed(val message: String) : Lookup()
+    }
+
+    /**
+     * 安全的逐级解析：任何一级读不到都如实区分成 Denied / Failed，
+     * 而不是像 [resolve] 那样一律返回 null。
+     */
+    fun lookup(rel: String): Lookup {
+        val norm = try {
+            PathGuard.normalize(rel)
+        } catch (e: Throwable) {
+            return Lookup.Failed(e.message ?: "路径不合法")
+        }
+        if (norm.isBlank()) return Lookup.Found(rootEntry())
+        var cur = rootEntry()
+        for (seg in norm.split('/')) {
+            if (!cur.isDir) return Lookup.NotFound
+            val kids = try {
+                queryChildren(cur.docId)
+            } catch (e: SecurityException) {
+                return Lookup.Denied("这个目录的读取授权已经失效")
+            } catch (e: Throwable) {
+                return Lookup.Failed(e.message ?: "读取目录失败")
+            }
+            val match = kids.firstOrNull { it.name == seg }
+                ?: kids.firstOrNull { it.name.equals(seg, ignoreCase = true) }
+                ?: kids.firstOrNull { looseName(it.name) == looseName(seg) }
+                ?: return Lookup.NotFound
+            cur = match
+        }
+        if (!cur.uri.toString().startsWith(treeUri.toString())) {
+            return Lookup.Failed("解析结果越出了工作区")
+        }
+        return Lookup.Found(cur)
+    }
+
+    /**
+     * 宽松查找：名字忽略大小写、空白、下划线、连字符，并在一层子目录里兜一圈。
+     *
+     * 为什么需要：SAF 在重名时会把新文件命名成 "报告 (1).pptx"；文件也可能被用户在
+     * 文件管理器里改名。模型当初记下的路径不会跟着变，快捷方式于是悬空。
+     */
+    fun findLoosely(rel: String): Entry? {
+        val norm = runCatching { PathGuard.normalize(rel) }.getOrNull() ?: return null
+        val want = looseName(PathGuard.nameOf(norm))
+        if (want.isEmpty()) return null
+        val dirs = ArrayList<Entry>()
+        val parent = PathGuard.parentOf(norm)
+        val p = if (parent.isBlank()) rootEntry() else runCatching { resolve(parent) }.getOrNull()
+        if (p != null && p.isDir) dirs.add(p)
+        val root = rootEntry()
+        if (dirs.none { it.docId == root.docId }) dirs.add(root)
+        // 一层子目录：技能产出经常被放进子文件夹
+        rawChildren(root.docId).filter { it.isDir }.take(40).forEach { dirs.add(it) }
+        // 换扩展名也算同一份文件：Word/WPS 的"另存为"经常把 .docx 存成 .doc，
+        // 截图里那种「卡片写着 .docx，目录里只有 .doc」就是这么来的。
+        val stem = looseName(stemOf(PathGuard.nameOf(norm)))
+        for (d in dirs) {
+            val kids = rawChildren(d.docId)
+            kids.firstOrNull { !it.isDir && looseName(it.name) == want }?.let { return it }
+            if (stem.isNotEmpty()) {
+                kids.firstOrNull { !it.isDir && looseName(stemOf(it.name)) == stem }?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** 去掉最后一个扩展名后的主干名；没有扩展名就原样返回 */
+    private fun stemOf(name: String): String = name.substringBeforeLast('.', name)
+
+    /** 宽松比较用的名字：NFC + 小写 + 去掉空白/下划线/连字符 */
+    private fun looseName(raw: String): String =
+        Normalizer.normalize(raw, Normalizer.Form.NFC)
+            .lowercase()
+            .replace(Regex("[\\s\\u00A0_]+"), "")
+            .replace(Regex("[-—–]+"), "")
 
     // ─────────── 大文件：流式访问 ───────────
     //
@@ -457,8 +551,14 @@ class WorkspaceFs(private val ctx: Context, val treeUri: Uri) {
         const val MAX_WRITE = 512L * 1024
         /** 单个文件的流式处理上限（备份 / 移动 / 复制） */
         const val MAX_COPY = 64L * 1024 * 1024
-        /** 一次 read_file 最多返回多少字符 */
-        const val MAX_WINDOW_CHARS = 32 * 1024
+        /**
+         * 一次 read_file 最多返回多少字符。
+         *
+         * 必须**小于**回灌上限（[ToolPolicy.MAX_RESULT_CHARS]）：结果一旦超过回灌上限，
+         * `truncateForModel` 会保留头尾、省略中间，模型按工具的承诺读到的是一份缺了中间的文件。
+         * 留 2k 余量给行号、省略提示这些包装字符。
+         */
+        const val MAX_WINDOW_CHARS = ToolPolicy.MAX_RESULT_CHARS - 2_000
         /** 单行展示上限，防止压缩过的 JSON 一行吃掉整个窗口 */
         const val MAX_LINE_CHARS = 2000
         /** 超过这个大小就不再统计总行数（数它要整读一遍，不划算） */

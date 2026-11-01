@@ -224,7 +224,8 @@ private fun ProviderCard(
                         }
                     } else {
                         Text(
-                            "切换",
+                            // 「切换」容易被读成"切换到别的模型"，实际动作是"用这个"
+                            "设为当前",
                             fontSize = 10.5.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = pal().accent,

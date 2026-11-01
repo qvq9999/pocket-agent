@@ -26,6 +26,9 @@ class MainActivity : ComponentActivity() {
     private val askNotification =
         registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
 
+    /** 和 setContent 里 viewModel() 是同一个实例；onStop 时用它把这一轮的消息落盘 */
+    private var hostVm: AppViewModel? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 边到边：系统栏透明，内容各自避让。
@@ -39,6 +42,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val vm: AppViewModel = viewModel()
+            hostVm = vm
             val persisted by vm.state.collectAsStateWithLifecycle()
 
             val mode = when (persisted.theme) {
@@ -53,6 +57,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * 退到后台/切走时落一次盘。
+     *
+     * agentTurn 现在每步都会存，但用户按 Home 的瞬间可能正好有一条刚出的草稿没存；
+     * 进程被系统回收时这一条就变成"AI 说到一半没了"。这里兜底，成本是一次 JSON 写。
+     */
+    override fun onStop() {
+        super.onStop()
+        runCatching { hostVm?.onHostStop() }
     }
 
     private fun maybeAskNotificationPermission() {

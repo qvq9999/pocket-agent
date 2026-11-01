@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.pocketagent.app.MainActivity
 import com.pocketagent.app.R
@@ -30,6 +31,9 @@ import com.pocketagent.app.R
  */
 class AgentRunService : Service() {
 
+    /** 部分唤醒锁：屏幕灭掉后 CPU 仍能跑完当前这一步，而不是被 Doze 掐在半路 */
+    private var wakeLock: PowerManager.WakeLock? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -46,10 +50,29 @@ class AgentRunService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        acquireWakeLock()
         return START_NOT_STICKY
     }
 
+    /**
+     * 拿一条带超时的部分唤醒锁。
+     *
+     * 后台 + 灭屏时 CPU 会进 Doze：前台服务只保证"进程不被回收"，不保证"还能继续算/继续收流"。
+     * 带 10 分钟超时（每次 start 会重新续上），任何异常退出最多 10 分钟后自动释放，
+     * 不会留下一条永远不灭的锁把电耗光。
+     */
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(PowerManager::class.java) ?: return
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PocketAgent:agent-run").apply {
+            setReferenceCounted(false)
+            runCatching { acquire(10 * 60 * 1000L) }
+        }
+    }
+
     override fun onDestroy() {
+        runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
+        wakeLock = null
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
         super.onDestroy()
     }

@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -46,12 +47,13 @@ import com.pocketagent.app.AppViewModel
 import com.pocketagent.app.agent.ToolPolicy
 import com.pocketagent.app.data.PermissionMode
 import com.pocketagent.app.data.UsageStats
+import com.pocketagent.app.data.effectiveContextWindow
 
 /**
  * 设置。**唯一的功能入口集合** —— 抽屉只做会话切换，进功能页一律从这儿走。
  *
  * 结构自上而下就是"越常用越靠上"：
- *   常用（主题 / 用量账单，就地弹窗或跳页） → 功能（模型 / 记忆 / 扩展，点行进二级页）
+ *   常用（主题 / 用量账单，就地弹窗或跳页） → 功能（模型 / 扩展 / 技能，点行进二级页）
  *   → 对话（工具能做什么） → 联网搜索 → 关于。
  *
  * 主题和用量账单被放在最上面：这两项是"看一眼、换一下"的高频操作，
@@ -61,8 +63,9 @@ import com.pocketagent.app.data.UsageStats
 fun SettingsScreen(
     vm: AppViewModel,
     onBack: () -> Unit,
+    /** 由 AppRoot 持有：设置页离开组合再回来时，滚动位置不能重置到顶部 */
+    listState: androidx.compose.foundation.lazy.LazyListState,
     onOpenModels: () -> Unit,
-    onOpenMemory: () -> Unit,
     onOpenExtensions: () -> Unit,
     onOpenUsage: () -> Unit,
     onOpenHelp: () -> Unit,
@@ -71,15 +74,11 @@ fun SettingsScreen(
     onReplayOnboard: () -> Unit,
 ) {
     val persisted by vm.state.collectAsStateWithLifecycle()
-    // 记忆条数要真实：不刷新的话「记忆」那行会一直停在"只存本机"
-    androidx.compose.runtime.LaunchedEffect(Unit) { vm.refreshMemory() }
     // 展开哪一组选项（null = 全部收起）。剩下的内联展开只有「永久允许的工具」一处 ——
     // 它展开的是"清单"，不是"单选"，弹窗反而无法在弹窗里逐条撤销。
     var expanded by remember { mutableStateOf<String?>(null) }
-    // 主题 / 访问权限改成弹窗：单选这件事用弹窗比内联展开更明确（点一项即生效、点外面就取消），
-    // 也不用把设置页越拉越长 —— 内联展开会把下面所有分组整体往下推一屏。
-    var showThemeDialog by remember { mutableStateOf(false) }
-    var showPermDialog by remember { mutableStateOf(false) }
+    // 主题 / 访问权限都是**就地分段**：三档以内的小决定，点一下即生效，
+    // 不再"点一行 → 弹窗 → 再点一次"。分段控件本身就说明了"这是单选"。
     // 联网搜索：默认开。值不进 VM 的 state（那是会话数据），这里就地读、就地改
     var searchOn by remember { mutableStateOf(vm.searchEnabled()) }
     var keyMasked by remember { mutableStateOf(vm.searchKeyMasked()) }
@@ -97,7 +96,6 @@ fun SettingsScreen(
     }
 
     val modelCount = vm.chatModels().size
-    val noteCount = vm.memoryDocs.size
     val extLabel = when (val s = vm.linuxStatus) {
         is AppViewModel.LinuxStatus.Ready -> "Linux 环境 · 已装"
         is AppViewModel.LinuxStatus.Working -> "安装中"
@@ -117,27 +115,88 @@ fun SettingsScreen(
         Column(Modifier.fillMaxSize().navigationBarsPadding()) {
             TopBar(title = "设置", onBack = onBack)
 
-            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                // 从二级页返回时恢复原来的滚动位置（列表状态由 AppRoot 持有）
 
                 // ── 常用：主题 + 用量账单 ──
                 // 放在第一屏最上面。主题是"顺手换一下"，用量是"看一眼今天花了多少"，
-                // 都属于高频轻操作，不该排在模型/记忆/扩展这三层导航后面。
+                // 都属于高频轻操作，不该排在模型/扩展/技能这三层导航后面。
+                // ── 当前配置：第一屏就回答"我现在是什么状态" ──
+                // 以前模型名、上下文窗口、今日用量全埋在二级页里，设置页最上面
+                // 反而只有两个"换一下/看一眼"的小项
+                item { Spacer(Modifier.height(12.dp)) }
+                item {
+                    OutlineCard {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        pal().accent.copy(alpha = if (pal().isDark) 0.16f else 0.10f)
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) { Glyph(G.CUBE, 18.dp, pal().accent, 2f) }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    vm.selectedModel()?.displayName ?: "未选模型",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = pal().ink,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    buildString {
+                                        append("上下文 ")
+                                        append(
+                                            vm.selectedModel()
+                                                ?.let { UsageStats.compact(it.effectiveContextWindow().toLong()) }
+                                                ?: "—"
+                                        )
+                                        append(" · 权限 ")
+                                        append(permissionLabelOf(persisted.permission))
+                                    },
+                                    style = ty().micro,
+                                    modifier = Modifier.padding(top = 2.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ── 常用：主题就地分段，不再弹窗 ──
                 item { SectionLabel("常用") }
                 item {
                     OutlineCard(padding = 0.dp) {
                         Column {
                             SettingRow(
                                 title = "主题",
-                                value = themeLabelOf(persisted.theme),
+                                value = "",
                                 icon = G.THEME,
                                 iconTint = pal().accent,
-                                onClick = { showThemeDialog = true },
+                                // 点整行不做别的：三档的小决定就该在这一行里解决
+                                onClick = {},
+                                clickable = false,
+                                trailing = {
+                                    Segmented(
+                                        options = listOf(
+                                            "system" to "跟随系统",
+                                            "light" to "浅色",
+                                            "dark" to "深色",
+                                        ),
+                                        selected = themeKeyOf(persisted.theme),
+                                        onSelect = { vm.setTheme(it) },
+                                    )
+                                },
                             )
                             Hairline()
                             SettingRow(
                                 title = "用量账单",
                                 value = if (todayTok > 0) "今日 ${UsageStats.compact(todayTok)} tok"
                                 else "还没有用量",
+                                desc = "按日 / 模型 / 用途拆分",
                                 icon = G.INFO,
                                 iconTint = pal().accent,
                                 onClick = onOpenUsage,
@@ -146,70 +205,38 @@ fun SettingsScreen(
                     }
                 }
 
-                // ── 功能：三个二级页的入口 ──
-                item { SectionLabel("功能") }
-                item {
-                    OutlineCard(padding = 0.dp) {
-                        Column {
-                            SettingRow(
-                                title = "模型",
-                                value = if (modelCount > 0) "$modelCount 个" else "还没有",
-                                icon = G.CUBE,
-                                iconTint = pal().accent,
-                                onClick = onOpenModels,
-                            )
-                            Hairline()
-                            SettingRow(
-                                title = "记忆",
-                                value = if (noteCount > 0) "$noteCount 篇笔记" else "只存本机",
-                                icon = G.SPARKLE,
-                                iconTint = pal().media,
-                                onClick = onOpenMemory,
-                            )
-                            Hairline()
-                            SettingRow(
-                                title = "扩展",
-                                value = extLabel,
-                                icon = G.SLIDERS,
-                                iconTint = pal().ok,
-                                onClick = onOpenExtensions,
-                            )
-                            Hairline()
-                            // 技能：装了几个、这段对话开了几个，"N 个 · M 启用"一眼能看完
-                            // 数字必须是真的：装了 N 个（解压副本在才算装）、开关打开 M 个。
-                            // 之前用 activeSkills.size 当"启用数"，那是"当前对话启用"，
-                            // 和这一行的开关不是一回事，看起来就像坏了
-                            val installedSkills = vm.skillCatalog().count {
-                                com.pocketagent.app.data.SkillStore
-                                    .skillDir(vm.getApplication(), it.id).isDirectory
-                            }
-                            val enabledSkills = vm.skillCatalog().count {
-                                it.id !in persisted.disabledSkills &&
-                                    com.pocketagent.app.data.SkillStore
-                                        .skillDir(vm.getApplication(), it.id).isDirectory
-                            }
-                            SettingRow(
-                                title = "Skill 管理",
-                                value = "$installedSkills 个 · $enabledSkills 启用",
-                                icon = G.SPARKLE,
-                                iconTint = pal().accent,
-                                onClick = onOpenSkills,
-                            )
-                        }
-                    }
-                }
-
-                // ── 对话：工具能做多远 ──
+                // ── 对话 ──
                 item { SectionLabel("对话") }
                 item {
                     OutlineCard(padding = 0.dp) {
                         Column {
                             SettingRow(
+                                title = "默认访问权限",
+                                value = "",
+                                desc = "新会话从这里开始，会话内还能临时改",
                                 icon = G.SHIELD,
                                 iconTint = pal().warn,
-                                title = "默认访问权限",
-                                value = permissionLabelOf(persisted.permission),
-                                onClick = { showPermDialog = true },
+                                onClick = {},
+                                clickable = false,
+                                trailing = {
+                                    Segmented(
+                                        options = listOf(
+                                            "readonly" to "只读",
+                                            "confirm" to "需确认",
+                                            "allow" to "允许",
+                                        ),
+                                        selected = permKeyOf(persisted.permission),
+                                        onSelect = { key ->
+                                            vm.setPermission(
+                                                when (key) {
+                                                    "readonly" -> PermissionMode.READONLY
+                                                    "allow" -> PermissionMode.ALLOW
+                                                    else -> PermissionMode.CONFIRM
+                                                }
+                                            )
+                                        },
+                                    )
+                                },
                             )
                             Hairline()
                             SettingRow(
@@ -218,6 +245,7 @@ fun SettingsScreen(
                                 title = "永久允许的工具",
                                 value = if (persisted.toolAllowList.isEmpty()) "无"
                                 else "${persisted.toolAllowList.size} 个",
+                                desc = "写操作点过「永久允许」的会记在这里",
                                 onClick = {
                                     if (persisted.toolAllowList.isEmpty()) {
                                         vm.notice = "还没有永久允许的工具。写操作弹确认时点「永久允许」会记在这里；" +
@@ -226,14 +254,13 @@ fun SettingsScreen(
                                         expanded = if (expanded == "allow") null else "allow"
                                     }
                                 },
-                                // 清单为空时它只是个"说明"动作，展不开，就不该给可展开的箭头
                                 expandable = persisted.toolAllowList.isNotEmpty(),
                                 expanded = expanded == "allow" && persisted.toolAllowList.isNotEmpty(),
                             )
                             AnimatedVisibility(
                                 visible = expanded == "allow" && persisted.toolAllowList.isNotEmpty(),
-                                enter = fadeIn(tween(120)) + expandVertically(tween(180)),
-                                exit = fadeOut(tween(90)) + shrinkVertically(tween(150)),
+                                enter = fadeIn(tween(120)) + expandVertically(tween(180), expandFrom = Alignment.Top),
+                                exit = fadeOut(tween(90)) + shrinkVertically(tween(150), shrinkTowards = Alignment.Top),
                             ) {
                                 Column {
                                     Hairline()
@@ -270,58 +297,46 @@ fun SettingsScreen(
                     }
                 }
 
-                // ── 联网搜索 ──
-                // 默认开启：用户不需要先"启用"才能让模型查东西；填 key 只是把额度提上去
-                item { SectionLabel("联网搜索") }
+                // 联网搜索并进「对话」：它调的是会话行为，不是独立模块。
+                // 卡片里三行就是一个功能的全部设置：开关 / 自己的 key / 去哪儿拿 key。
+                item { Spacer(Modifier.height(10.dp)) }
                 item {
                     OutlineCard(padding = 0.dp) {
                         Column {
-                            Row(
-                                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Box(
-                                    Modifier
-                                        .size(28.dp)
-                                        .clip(RoundedCornerShape(9.dp))
-                                        .background(pal().accent.copy(alpha = if (pal().isDark) 0.16f else 0.10f)),
-                                    contentAlignment = Alignment.Center,
-                                ) { Glyph(G.SEARCH, 15.dp, pal().accent, 2f) }
-                                Spacer(Modifier.width(11.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        "联网搜索",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = pal().ink,
+                            SettingRow(
+                                title = "联网搜索",
+                                value = "",
+                                desc = if (searchOn) "模型可自行决定要不要搜 · ${vm.searchQuotaText()}"
+                                else "已关闭：模型只能用已有知识回答",
+                                icon = G.SEARCH,
+                                iconTint = pal().accent,
+                                onClick = {
+                                    searchOn = !searchOn
+                                    vm.setSearchEnabled(searchOn)
+                                },
+                                trailing = {
+                                    androidx.compose.material3.Switch(
+                                        checked = searchOn,
+                                        onCheckedChange = {
+                                            searchOn = it
+                                            vm.setSearchEnabled(it)
+                                        },
+                                        colors = androidx.compose.material3.SwitchDefaults.colors(
+                                            checkedThumbColor = pal().card,
+                                            checkedTrackColor = pal().accent,
+                                            uncheckedThumbColor = pal().card,
+                                            uncheckedTrackColor = pal().line,
+                                            uncheckedBorderColor = pal().line,
+                                        ),
                                     )
-                                    Text(
-                                        if (searchOn) "模型可自行决定要不要搜 · ${vm.searchQuotaText()}"
-                                        else "已关闭：模型只能用已有知识回答",
-                                        style = ty().micro,
-                                        modifier = Modifier.padding(top = 1.dp),
-                                    )
-                                }
-                                Spacer(Modifier.width(8.dp))
-                                androidx.compose.material3.Switch(
-                                    checked = searchOn,
-                                    onCheckedChange = {
-                                        searchOn = it
-                                        vm.setSearchEnabled(it)
-                                    },
-                                    colors = androidx.compose.material3.SwitchDefaults.colors(
-                                        checkedThumbColor = pal().card,
-                                        checkedTrackColor = pal().accent,
-                                        uncheckedThumbColor = pal().card,
-                                        uncheckedTrackColor = pal().line,
-                                        uncheckedBorderColor = pal().line,
-                                    ),
-                                )
-                            }
+                                },
+                            )
                             Hairline()
                             SettingRow(
                                 title = "AnySearch Key",
-                                value = if (keyMasked.isBlank()) "未填 · 走匿名额度" else keyMasked,
+                                value = if (keyMasked.isBlank()) "未填" else keyMasked,
+                                desc = if (keyMasked.isBlank()) "不填也能用，匿名额度 300 次/天"
+                                else "已设置，额度提到 1500 次/天",
                                 icon = G.SHIELD,
                                 iconTint = pal().media,
                                 onClick = { showKeyDialog = true },
@@ -332,6 +347,7 @@ fun SettingsScreen(
                                 value = "anysearch.com",
                                 icon = G.INFO,
                                 iconTint = pal().muted,
+                                external = true,
                                 onClick = { openUrl("https://www.anysearch.com") },
                             )
                         }
@@ -339,11 +355,54 @@ fun SettingsScreen(
                 }
                 item {
                     Text(
-                        "搜索由 AnySearch 提供：不填 key 也能用（匿名额度，本地限流每天 300 次）；" +
-                            "填自己的 key 后提到 1500 次/天。key 用系统密钥库加密后只存本机。",
+                        "key 用系统密钥库加密后只存本机；不填也不会关掉搜索。",
                         style = ty().micro,
-                        modifier = Modifier.padding(top = 8.dp),
+                        modifier = Modifier.padding(top = 8.dp, start = 2.dp),
                     )
+                }
+
+                // ── 模型与能力 ──
+                item { SectionLabel("模型与能力") }
+                item {
+                    OutlineCard(padding = 0.dp) {
+                        Column {
+                            SettingRow(
+                                title = "模型",
+                                value = if (modelCount > 0) "$modelCount 个" else "还没有",
+                                desc = "增删、改端点与上下文窗口",
+                                icon = G.CUBE,
+                                iconTint = pal().accent,
+                                onClick = onOpenModels,
+                            )
+                            Hairline()
+                            val installedSkills = vm.skillCatalog().count {
+                                com.pocketagent.app.data.SkillStore
+                                    .skillDir(vm.getApplication(), it.id).isDirectory
+                            }
+                            val enabledSkills = vm.skillCatalog().count {
+                                it.id !in persisted.disabledSkills &&
+                                    com.pocketagent.app.data.SkillStore
+                                        .skillDir(vm.getApplication(), it.id).isDirectory
+                            }
+                            SettingRow(
+                                title = "Skill 管理",
+                                value = "$installedSkills 个 · $enabledSkills 启用",
+                                desc = "技能是操作手册，只在对话里手动选中的才生效",
+                                icon = G.SPARKLE,
+                                iconTint = pal().accent,
+                                onClick = onOpenSkills,
+                            )
+                            Hairline()
+                            SettingRow(
+                                title = "扩展",
+                                value = "",
+                                desc = if (extLabel.isBlank()) "可选的终端能力" else extLabel,
+                                icon = G.SLIDERS,
+                                iconTint = pal().ok,
+                                onClick = onOpenExtensions,
+                            )
+                        }
+                    }
                 }
 
                 // ── 关于 ──
@@ -351,28 +410,24 @@ fun SettingsScreen(
                 item {
                     OutlineCard(padding = 0.dp) {
                         Column {
-                            // 使用说明排在最前：它是"关于"里唯一需要主动去读的一项，
-                            // 版本号和重看引导都是看一眼就走
                             SettingRow(
                                 title = "使用说明",
                                 value = "",
-                                desc = "各功能模块的操作步骤，从发第一条消息到打开产出文件",
+                                desc = "各功能怎么用：从发第一条消息到打开产出文件",
                                 icon = G.DOC,
                                 iconTint = pal().accent,
                                 onClick = onOpenHelp,
                             )
                             Hairline()
-                            // 重看入口：只重置"跳过/完成"两个时间戳，模型与目录都不动 ——
-                            // 重看说明不该让人重新配置一遍。点完直接回会话页，卡片就在那儿
                             SettingRow(
                                 title = "使用引导",
                                 value = vm.onboardStatus(persisted),
+                                desc = "重看一遍首次使用的三步引导",
                                 icon = G.SPARKLE,
                                 iconTint = pal().accent,
                                 onClick = onReplayOnboard,
                             )
                             Hairline()
-                            // 版本固定放最后：它只是"看一眼"，不该夹在两个可点项中间
                             SettingRow(
                                 "版本",
                                 com.pocketagent.app.BuildConfig.VERSION_NAME,
@@ -402,47 +457,6 @@ fun SettingsScreen(
             )
         }
 
-        if (showThemeDialog) {
-            SettingChoiceDialog(
-                title = "主题",
-                subtitle = "跟随系统会随手机的深色开关自动切换。",
-                selected = themeKeyOf(persisted.theme),
-                options = listOf(
-                    ChoiceOption("system", "跟随系统", "随系统深色开关自动切换"),
-                    ChoiceOption("light", "浅色", "始终使用亮色界面"),
-                    ChoiceOption("dark", "深色", "纯黑背景，OLED 屏在这些区域不发光"),
-                ),
-                onPick = { key ->
-                    vm.setTheme(key)
-                    showThemeDialog = false
-                },
-                onDismiss = { showThemeDialog = false },
-            )
-        }
-
-        if (showPermDialog) {
-            SettingChoiceDialog(
-                title = "默认访问权限",
-                subtitle = "越界路径、备份失败、文件被外部改动，这三种情况即使「全部允许」也硬拦截。",
-                selected = permKeyOf(persisted.permission),
-                options = listOf(
-                    ChoiceOption("readonly", "只读", "只能读与搜，写删工具从工具表移除"),
-                    ChoiceOption("confirm", "需确认", "写入与删除每次弹确认并展示 diff"),
-                    ChoiceOption("allow", "全部允许", "写删自动执行，仍先拍快照，可在对话里撤销"),
-                ),
-                onPick = { key ->
-                    vm.setPermission(
-                        when (key) {
-                            "readonly" -> PermissionMode.READONLY
-                            "allow" -> PermissionMode.ALLOW
-                            else -> PermissionMode.CONFIRM
-                        }
-                    )
-                    showPermDialog = false
-                },
-                onDismiss = { showPermDialog = false },
-            )
-        }
     }
 }
 
@@ -662,6 +676,43 @@ private fun permissionLabelOf(mode: String): String = when (permKeyOf(mode)) {
 }
 
 /**
+ * 就地分段选择器：三档以内的小决定放在行右侧，点一下即生效。
+ *
+ * 为什么不用弹窗：弹窗要两次点击（开 → 选 → 关），而且把"当前值"藏起来；
+ * 分段控件本身就把所有选项摊在眼前，也天然表达"这是单选"。
+ */
+@Composable
+private fun Segmented(
+    options: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(9.dp))
+            .background(pal().surfaceAlt)
+            .padding(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
+        options.forEach { (key, label) ->
+            val on = key == selected
+            Text(
+                label,
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (on) pal().accentInk else pal().muted,
+                maxLines = 1,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(if (on) pal().card else Color.Transparent)
+                    .clickable { onSelect(key) }
+                    .padding(horizontal = 7.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/**
  * 设置项一行。可在本包内复用（用量账单页的「清空账单」也用这一行），
  * 所以不是 private —— 两处各写一套会把行高、箭头角度、配色分出两个版本。
  */
@@ -684,6 +735,13 @@ internal fun SettingRow(
      * 有值时标题列占满剩余宽度，右侧的 [value] 仍然靠右对齐。
      */
     desc: String? = null,
+    /** 外链：右侧箭头画成 ↗，明确"会离开 App" */
+    external: Boolean = false,
+    /**
+     * 自定义右侧控件（分段选择器等）。给了它就不画 value + 箭头，
+     * 让"这一行会发生什么"只由这一个控件表达。
+     */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     // 与会话记录列表的分组箭头完全同一套：同一个图标、同一套角度、同一个 160ms。
     // 用旋转而不是换图标（CHEV_RIGHT ↔ CHEV_DOWN）：换图标是硬切，旋转能让人
@@ -740,24 +798,33 @@ internal fun SettingRow(
                 )
             }
         }
-        if (value.isNotBlank()) {
-            Text(
-                value,
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.Medium,
-                color = pal().muted,
-            )
-        }
-        if (clickable) {
-            Spacer(Modifier.width(5.dp))
-            if (expandable) {
-                Glyph(
-                    G.CHEV_DOWN, 13.dp, pal().faint, 2.2f,
-                    Modifier.graphicsLayer { rotationZ = chevronAngle },
+        if (trailing != null) {
+            Spacer(Modifier.width(8.dp))
+            trailing()
+        } else {
+            if (value.isNotBlank()) {
+                Text(
+                    value,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = pal().muted,
                 )
-            } else {
-                // 动作行（点进去做事/弹确认）保持"朝右"的既有语义，不做旋转
-                Glyph(G.CHEV_RIGHT, 13.dp, pal().faint, 2.2f)
+            }
+            if (clickable) {
+                Spacer(Modifier.width(5.dp))
+                when {
+                    expandable -> Glyph(
+                        G.CHEV_DOWN, 13.dp, pal().faint, 2.2f,
+                        Modifier.graphicsLayer { rotationZ = chevronAngle },
+                    )
+                    // 外链：把右箭头转 -45° 变成 ↗，一眼看出"会离开 App"
+                    external -> Glyph(
+                        G.CHEV_RIGHT, 13.dp, pal().faint, 2.2f,
+                        Modifier.graphicsLayer { rotationZ = -45f },
+                    )
+                    // 动作行（点进去做事/弹确认）保持"朝右"的既有语义
+                    else -> Glyph(G.CHEV_RIGHT, 13.dp, pal().faint, 2.2f)
+                }
             }
         }
     }

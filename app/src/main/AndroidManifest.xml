@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Android 13+：没有这个权限通知会被隐藏，但服务仍算前台（保活不受影响） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 后台跑长任务时灭屏会让 CPU 进 Doze，收流/工具执行会停在半路 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!--
         Android 11+ 的包可见性：不声明 <queries> 时，queryIntentActivities 只看得见本应用自己。

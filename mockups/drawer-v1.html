@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  :root{
+    --ink:#1B1C1E; --muted:#5F6368; --hint:#8A9099; --faint:#A2A8B0;
+    --line:#E3E5EA; --lineSoft:#EDEFF3; --surface:#F7F8FA; --surfaceAlt:#F1F3F6;
+    --card:#FFFFFF; --accent:#1A73E8; --accentSoft:#E8F0FE; --accentInk:#12508F;
+    --ok:#1E7B4D; --okSoft:#E7F4EC; --warn:#8A5A00; --warnSoft:#FDF3E0;
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+  body{margin:0;background:#E9EBEF;font-family:"Segoe UI","PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;color:var(--ink)}
+  .wrap{display:flex;flex-wrap:wrap;gap:20px;padding:18px;align-items:flex-start;max-width:880px}
+  .cap{font-size:12px;font-weight:600;color:#3C4043;margin:0 0 8px 3px}
+  .cap span{font-weight:400;color:#80868B}
+  .phone{width:393px;background:#fff;border-radius:20px;overflow:hidden;border:1px solid #DDE0E5;box-shadow:0 6px 20px rgba(0,0,0,.08);height:560px;display:flex;flex-direction:column}
+  .scrim{flex:1;background:#F2F3F5;position:relative}
+  .drawer{width:302px;height:100%;background:#fff;border-right:1px solid var(--line);padding:0 0 10px;display:flex;flex-direction:column}
+  .head{padding:14px 14px 0}
+  .brand{display:flex;align-items:center;gap:11px}
+  .logo{width:38px;height:38px;border-radius:11px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:17px;font-weight:700}
+  .bname{font-size:16px;font-weight:700}
+  .bsub{font-size:10.5px;color:var(--hint);margin-top:1px}
+  .newbtn{margin-top:14px;height:42px;border-radius:12px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;gap:6px;font-size:14px;font-weight:600}
+  .search{margin-top:10px;height:38px;border-radius:12px;background:var(--surfaceAlt);display:flex;align-items:center;gap:8px;padding:0 11px;font-size:12.5px;color:var(--hint)}
+  .search .dots{margin-left:auto;color:var(--faint);font-size:14px}
+  .filter{margin-top:8px;display:flex;gap:6px}
+  .fchip{font-size:10.5px;font-weight:600;color:var(--muted);background:var(--surfaceAlt);border-radius:50px;padding:3px 9px}
+  .fchip.on{background:var(--accentSoft);color:var(--accentInk)}
+  .list{flex:1;overflow:hidden;padding:6px 8px 0}
+  .grp{display:flex;align-items:center;gap:6px;padding:9px 6px 4px;font-size:11px;font-weight:700;color:var(--faint);letter-spacing:.3px}
+  .grp .n{margin-left:auto;font-weight:600}
+  .row{display:flex;align-items:center;gap:8px;padding:8px 8px;border-radius:11px;position:relative}
+  .row.on{background:#F3F7FE}
+  .row.on::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:2.5px;border-radius:3px;background:var(--accent)}
+  .rt{flex:1;min-width:0}
+  .r1{font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .r2{font-size:10px;color:var(--faint);margin-top:2px;display:flex;align-items:center;gap:5px}
+  .dot{width:5px;height:5px;border-radius:50%;background:var(--ok)}
+  .busy{width:6px;height:6px;border-radius:50%;background:var(--accent);flex:none}
+  .foot{border-top:1px solid var(--lineSoft);padding:8px 10px 0;display:flex;align-items:center;gap:10px}
+  .fitem{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--ink);padding:8px 6px}
+  .note{width:100%;max-width:846px;font-size:11.5px;line-height:19px;color:#5F6368;background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+  .note b{color:#1B1C1E}
+  .note ul{padding-left:16px;margin:6px 0}
+  .note li{margin-bottom:4px}
+  .cols{display:flex;gap:18px;flex-wrap:wrap}
+  .cols>div{flex:1;min-width:250px}
+  .tag{display:inline-block;font-size:9.5px;padding:1px 6px;border-radius:50px;background:var(--surfaceAlt);color:var(--muted);margin-left:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div>
+    <p class="cap">① 现状 <span>· 品牌块占 200dp，会话行只有标题+时间</span></p>
+    <div class="phone"><div class="scrim"><div class="drawer">
+      <div class="head">
+        <div class="brand"><div class="logo">✦</div><div><div class="bname">Pocket Agent</div><div class="bsub">3 个模型可用</div></div></div>
+        <div class="newbtn">＋　新会话</div>
+        <div class="search">⌕ 搜索会话 <span class="dots">⋯</span></div>
+      </div>
+      <div class="list">
+        <div class="grp">⌄ 普通会话<span class="n">3</span></div>
+        <div class="row on"><div class="rt"><div class="r1">你好</div><div class="r2">9 分钟前</div></div></div>
+        <div class="row"><div class="rt"><div class="r1">用linux环境看看系统版本，统计/usr/bin…</div><div class="r2">2 小时前</div></div></div>
+        <div class="row"><div class="rt"><div class="r1">run a shell helper to length</div><div class="r2">3 小时前</div></div></div>
+        <div class="grp">› 工作区　测试<span class="n">2</span></div>
+      </div>
+      <div class="foot"><div class="fitem">⚙ 设置</div></div>
+    </div></div></div>
+  </div>
+
+  <div>
+    <p class="cap">② 方案 <span>· 状态前置、会话行带元信息、底部直达</span></p>
+    <div class="phone"><div class="scrim"><div class="drawer">
+      <div class="head">
+        <div class="brand">
+          <div class="logo">✦</div>
+          <div style="flex:1;min-width:0">
+            <div class="bname" style="font-size:15px">Pocket Agent</div>
+            <div class="bsub">agnes-3.0-flash · 今日 3.32M tok</div>
+          </div>
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--surfaceAlt);display:flex;align-items:center;justify-content:center;color:var(--muted)">＋</div>
+        </div>
+        <div class="search" style="margin-top:12px">⌕ 搜索标题与正文<span class="dots">⇅</span></div>
+        <div class="filter"><span class="fchip on">全部</span><span class="fchip">普通</span><span class="fchip">工作区</span><span class="fchip">最近 7 天</span></div>
+      </div>
+      <div class="list">
+        <div class="grp">⌄ 今天<span class="n">1</span></div>
+        <div class="row on">
+          <div class="rt"><div class="r1">你好</div><div class="r2">agnes-3.0-flash · 9 分钟前</div></div>
+          <div class="busy"></div>
+        </div>
+        <div class="grp">⌄ 更早<span class="n">2</span></div>
+        <div class="row"><div class="rt"><div class="r1">用linux环境看看系统版本，统计/usr/bin…</div><div class="r2">mimo-v2.6-flash · 2 小时前</div></div></div>
+        <div class="row"><div class="rt"><div class="r1">run a shell helper to length</div><div class="r2">mimo-v2.6-flash · 3 小时前</div></div></div>
+        <div class="grp">⌄ 工作区　测试<span class="n">2</span></div>
+        <div class="row"><div class="rt"><div class="r1">生成一个使命召唤战区的介绍ppt</div><div class="r2">📁 测试 · 昨天</div></div></div>
+      </div>
+      <div class="foot">
+        <div class="fitem">⚙ 设置</div>
+        <div class="fitem" style="margin-left:auto;color:var(--muted)">◇ 模型</div>
+        <div class="fitem" style="color:var(--muted)">▤ 用量</div>
+      </div>
+    </div></div></div>
+  </div>
+
+  <div class="note">
+    <div class="cols">
+      <div>
+        <b>现状的问题</b>
+        <ul>
+          <li>顶部 200dp 只放品牌名 + 一句"3 个模型可用"，<b>信息密度极低</b>，会话区被压到半屏</li>
+          <li>会话行只有<b>标题 + 相对时间</b>：同一批会话里分不清哪条用了哪个模型、哪条绑了工作区</li>
+          <li>搜索框右侧的 <b>⋯</b> 用途不明（看起来像"更多搜索选项"，实际不是）</li>
+          <li>分组只有"普通 / 工作区"两档，<b>时间维度丢了</b>；长会话列表里找"昨天的"只能靠滑</li>
+          <li>底部只有「设置」：模型、用量都要再点两层</li>
+          <li>正在生成的那段会话在列表里<b>没有任何标记</b>，切走再回来容易找不到</li>
+        </ul>
+      </div>
+      <div>
+        <b>方案要点</b>
+        <ul>
+          <li>顶部压缩：品牌 + <b>当前模型 · 今日用量</b>；「新会话」从满宽按钮改成右上角 <b>＋ 圆钮</b>，省 50dp</li>
+          <li>搜索框右侧改成 <b>排序/筛选开关</b>，下面挂一排 <b>筛选片</b>（全部 / 普通 / 工作区 / 最近 7 天）</li>
+          <li>会话行加第二行元信息：<b>模型名 · 时间</b>；工作区会话再带 📁 目录名</li>
+          <li>分组改成 <b>今天 / 更早 / 工作区</b>，时间维度回到第一层</li>
+          <li>当前会话左侧 <b>2.5dp 强调竖条</b>（与设置页、弹层同一套选中语言）</li>
+          <li>正在生成的会话右上角一个 <b>蓝色小圆点</b>，切回来一眼定位</li>
+          <li>底部：设置 + <b>模型</b> + <b>用量</b> 三个直达入口（都只跳一层）</li>
+        </ul>
+      </div>
+    </div>
+    <b>顺手一并修的</b>
+    <ul>
+      <li>侧边栏搜索唤出键盘时背景会话页被顶高 —— 已修（输入区只在自身持焦点时吃 IME inset）</li>
+      <li>「⋯」图标在会话行尾的删除入口：现在只有长按，方案里可以保留长按、不加显式按钮，避免行内控件变多</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

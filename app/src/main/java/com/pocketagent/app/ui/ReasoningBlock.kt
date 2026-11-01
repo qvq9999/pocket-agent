@@ -145,8 +145,10 @@ fun ReasoningBlock(
 
         AnimatedVisibility(
             visible = expanded,
-            enter = fadeIn(tween(160)) + expandVertically(tween(180)),
-            exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
+            // expandFrom 必须显式给 Top：默认是 Alignment.Bottom，内容从底边往上顶，
+            // 点开时看着像"往上展开"、标题还往上跳。Top = 标题不动、正文往下展开。
+            enter = fadeIn(tween(160)) + expandVertically(tween(180), expandFrom = Alignment.Top),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(160), shrinkTowards = Alignment.Top),
         ) {
             Box(
                 Modifier

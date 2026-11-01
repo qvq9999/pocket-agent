@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -89,36 +91,74 @@ private fun Box16(on: Boolean) {
     }
 }
 
+/**
+ * 选择类弹层的**唯一**行样式。
+ *
+ * 三处（模型 / 思考 / 权限）以前各写一套：模型是"单选圈 + 图标 + 两行 + 徽标"、
+ * 思考是"单选圈 + 彩点 + 单行 + 等宽参数"、权限是"单选圈 + 两行说明"，
+ * 行高 40/34/44dp 各不相同 —— 同一个交互三种长相，是弹层看着割裂的主因。
+ *
+ * 现在统一成 44dp：`图标 18 · 标题 13 · 副标题 10.5 · 右侧 ✓`。
+ * 选中态用**左侧强调竖条 + 浅底**而不是单选圈：这里表达的是"当前值"，
+ * 不是一张待提交的表单，圆圈会暗示"还要再点一次确认"。
+ */
 @Composable
 fun PopoverItem(
     title: String,
     selected: Boolean,
     onClick: () -> Unit,
-    desc: String? = null,
-    trailing: String? = null,
+    subtitle: String? = null,
+    /** 副标题要不要用警示色（"全部允许"这类后果） */
+    warnSubtitle: Boolean = false,
+    icon: (@Composable () -> Unit)? = null,
 ) {
     Row(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = 44.dp)
             .clip(RoundedCornerShape(11.dp))
             .background(if (selected) pal().accentSoft else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 9.dp, vertical = 7.dp),
-        verticalAlignment = if (desc == null) Alignment.CenterVertically else Alignment.Top,
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        androidx.compose.foundation.layout.Box(Modifier.padding(top = if (desc == null) 0.dp else 1.dp)) {
-            PopoverRadio(selected)
+        if (selected) {
+            Box(
+                Modifier
+                    .width(2.5.dp)
+                    .height(22.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(pal().accent)
+            )
+            Spacer(Modifier.width(8.dp))
         }
-        Spacer(Modifier.width(9.dp))
+        if (icon != null) {
+            Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) { icon() }
+            Spacer(Modifier.width(10.dp))
+        }
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = pal().ink)
-            if (desc != null) {
-                Text(desc, fontSize = 10.5.sp, lineHeight = 15.sp, color = pal().hint)
+            Text(
+                title,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = pal().ink,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    fontSize = 10.5.sp,
+                    lineHeight = 14.sp,
+                    color = if (warnSubtitle) pal().warn else pal().hint,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
             }
         }
-        if (trailing != null) {
-            Spacer(Modifier.width(8.dp))
-            Text(trailing, style = ty().monoId)
+        if (selected) {
+            Spacer(Modifier.width(6.dp))
+            Glyph(G.CHECK, 14.dp, pal().accent, 2.4f)
         }
     }
 }

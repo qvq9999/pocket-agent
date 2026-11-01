@@ -138,7 +138,7 @@ class ProotRuntime(private val ctx: Context) {
      * 2. **优先 bash**。Ubuntu 有 bash，`-l` 能加载标准 PATH；Alpine 没有时回退 `/bin/sh`。
      * 3. **绑定一个可写目录到 `/workspace`**。RikkaHub 绑的是整个 `filesDir`；
      *    这里绑 `filesDir/shellspace` —— shell 需要一个能写临时文件的地方，
-     *    但不该让它够得着 `state.json` 和记忆文件（一次 rm 就没了配置）。
+     *    但不该让它够得着 `state.json`（一次 rm 就没了配置）。
      *
      * 命令通过位置参数传入（`eval "$2"`），不做字符串拼接转义。
      *

@@ -43,8 +43,12 @@ val StatusBarSpace = 44.dp
 fun TopBar(
     title: String,
     subtitle: String? = null,
+    /** 副标题颜色：会话页用它表达"需重新授权 / 未选工作区"这类要注意的状态 */
+    subtitleColor: Color? = null,
     onBack: (() -> Unit)? = null,
     onMenu: (() -> Unit)? = null,
+    /** 副标题可点（会话页=换工作区），给了才加点击热区 */
+    onSubtitleClick: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
     Row(
@@ -59,13 +63,34 @@ fun TopBar(
             onBack != null -> SquareIcon(G.BACK, onBack)
             onMenu != null -> SquareIcon(G.MENU, onMenu)
         }
-        Column(Modifier.padding(start = 4.dp)) {
-            Text(title, style = ty().barTitle, maxLines = 1)
+        // weight(1f) 独占剩余宽度：之前给的是 fill=false 再在后面跟一个 Spacer(weight)，
+        // 两者按权重分同一块空间，长副标题会被提前截成"选择工作区 · 才能读写文…"
+        Column(Modifier.padding(start = 4.dp).weight(1f)) {
+            Text(
+                title,
+                style = ty().barTitle,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
             if (subtitle != null) {
-                Text(subtitle, style = ty().micro, maxLines = 1)
+                val sub = @Composable {
+                    Text(
+                        subtitle,
+                        style = ty().micro,
+                        color = subtitleColor ?: ty().micro.color,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
+                if (onSubtitleClick == null) sub()
+                else Box(
+                    Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(onClick = onSubtitleClick)
+                        .padding(end = 6.dp, top = 1.dp, bottom = 1.dp),
+                ) { sub() }
             }
         }
-        Spacer(Modifier.weight(1f))
         trailing?.invoke()
     }
 }
@@ -80,87 +105,6 @@ fun SquareIcon(kind: G, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Glyph(kind, 20.dp, pal().ink, 1.9f)
-    }
-}
-
-/**
- * 顶栏 / 输入区的小胶囊。
- *
- * 输入区那三颗是**三等分**排的（调用方传 weight(1f)），所以宽度天然一致、左缘永远对齐，
- * 文案长短不会再让它们一宽一窄地抖。
- *
- * 文字不做省略号：先扣掉固定件（左右内边距、前导点或图标、尾部箭头）得到文字预算，
- * 再按 11.5 → 11 → 10.5 → 10 → 9.5 逐档试字号，取第一个放得下的。
- * 极端长的模型名（> 20 字）才退到省略号 —— 那是兜底，不是常态。
- */
-@Composable
-fun PillChip(
-    text: String,
-    bg: Color,
-    fg: Color,
-    leadingGlyph: G? = null,
-    leadingDot: Color? = null,
-    enabled: Boolean = true,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    BoxWithConstraints(
-        modifier
-            .height(29.dp)
-            .clip(RoundedCornerShape(50))
-            .background(bg)
-            .clickable(enabled = enabled, onClick = onClick),
-    ) {
-        // 固定件宽度：内边距 9+7、前导点 5+5 或图标 13+5、尾部箭头 11+1
-        val fixed = 16.dp + (if (leadingDot != null) 10.dp else 0.dp) +
-            (if (leadingGlyph != null) 18.dp else 0.dp) + 12.dp
-        val budget = (maxWidth - fixed).coerceAtLeast(24.dp)
-
-        Row(
-            Modifier.fillMaxSize().padding(start = 9.dp, end = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (leadingDot != null) {
-                Box(Modifier.size(5.dp).clip(CircleShape).background(leadingDot))
-                Spacer(Modifier.width(5.dp))
-            }
-            if (leadingGlyph != null) {
-                Glyph(leadingGlyph, 13.dp, fg, 1.9f)
-                Spacer(Modifier.width(5.dp))
-            }
-            Text(
-                text,
-                fontSize = fittedChipFont(text, budget),
-                fontWeight = FontWeight.SemiBold,
-                color = fg,
-                maxLines = 1,
-                softWrap = false,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(1.dp))
-            Glyph(G.CHEV_DOWN, 11.dp, fg.copy(alpha = if (enabled) 0.75f else 0.4f), 2.6f)
-        }
-    }
-}
-
-/** 给定宽度下能放下的最大字号；全放不下就用最小档，交给省略号兜底 */
-@Composable
-private fun fittedChipFont(text: String, budget: Dp): TextUnit {
-    val measurer = rememberTextMeasurer()
-    val density = LocalDensity.current
-    return remember(text, budget, density) {
-        val w = with(density) { budget.toPx() }
-        val ladder = listOf(11.5f, 11f, 10.5f, 10f, 9.5f)
-        val hit = ladder.firstOrNull { size ->
-            measurer.measure(
-                text = AnnotatedString(text),
-                style = TextStyle(fontSize = size.sp, fontWeight = FontWeight.SemiBold),
-                maxLines = 1,
-                softWrap = false,
-            ).size.width <= w
-        }
-        (hit ?: ladder.last()).sp
     }
 }
 

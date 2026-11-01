@@ -131,7 +131,16 @@ class Store(context: Context) {
                 else -> PersistedState(version = CURRENT_VERSION)
             }
 
-            val migrated = migrate(restored)
+            val migrated = migrate(restored).let { s ->
+                // 永久允许名单里可能有已经删掉的工具（skill_run、memory_save…）。
+                // 留着它不影响安全（那些工具根本不会下发），但设置页会显示"1 个"却点不开，
+                // 用户只会当成 bug。每次加载按当前工具集过滤一遍，不需要额外的版本号。
+                val alive = s.toolAllowList.filter { it in com.pocketagent.app.agent.ToolPolicy.allTools }
+                if (alive.size != s.toolAllowList.size) {
+                    needsPersist = true
+                    s.copy(toolAllowList = alive)
+                } else s
+            }
             _state.value = migrated
             // 版本升级或做过修复后立刻回写：否则坏文件一直留在盘上，
             // 每次启动都要重新修复一遍、重复弹同一条提示

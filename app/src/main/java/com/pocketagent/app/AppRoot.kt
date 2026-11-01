@@ -51,8 +51,8 @@ import com.pocketagent.app.ui.ConfirmDialog
 import com.pocketagent.app.ui.DrawerPanel
 import com.pocketagent.app.ui.EditModelScreen
 import com.pocketagent.app.ui.ExtensionsScreen
-import com.pocketagent.app.ui.MemoryScreen
 import com.pocketagent.app.ui.ModelListScreen
+import com.pocketagent.app.ui.OnboardingScreen
 import com.pocketagent.app.ui.PresetScreen
 import com.pocketagent.app.ui.SettingsScreen
 import com.pocketagent.app.ui.SkillDetailScreen
@@ -71,11 +71,13 @@ sealed interface Screen {
     data object Models : Screen
     data object Presets : Screen
     data object Settings : Screen
-    data object Memory : Screen
     data object Extensions : Screen
 
     /** 用量账单。从设置进来，清空账单也在这页里 */
     data object Usage : Screen
+
+    /** 新手引导：独立全屏页，盖在会话页之上（不再是会话空态里的一张卡） */
+    data object Onboard : Screen
 
     /** 使用说明。从设置 → 关于进来，只读，没有可保存的东西 */
     data object Help : Screen
@@ -96,7 +98,7 @@ sealed interface Screen {
  */
 private fun Screen.depth(): Int = when (this) {
     Screen.Settings -> 1
-    Screen.Models, Screen.Memory, Screen.Extensions, Screen.Usage, Screen.Help,
+    Screen.Models, Screen.Extensions, Screen.Usage, Screen.Help, Screen.Onboard,
     Screen.SkillManager -> 2
     Screen.Presets -> 3
     is Screen.SkillDetail -> 3
@@ -357,6 +359,10 @@ fun AppRoot(vm: AppViewModel) {
                 // 对话页弹层里的「去管理模型」：抽屉没开，所以二级页正常滑入
                 onOpenModels = { openFromChat(Screen.Models) },
                 onPickWorkspace = { workspacePicker.launch(null) },
+                // 导出入口从抽屉的 ⋯ 挪到了顶栏 ⋯（抽屉那颗位置让给了筛选）
+                onExport = {
+                    exportPicker.launch("pocket-agent-${System.currentTimeMillis()}.md")
+                },
             )
         }
 
@@ -409,6 +415,24 @@ fun AppRoot(vm: AppViewModel) {
         // 唯一不照搬的是 fadeIn/fadeOut：他们每页下面垫的是纯色背景，可以淡；
         // 我们下面是活的会话页，一淡就透底 —— 所以这里任何一帧都必须有一页**完全不透明**
         // 地盖住屏幕，靠位移和缩放表达层次，不靠透明度。
+        // 设置页的滚动位置放在**这里**持有。
+        // 设置页一旦 push 出二级页就会离开组合，它内部 remember 的 LazyListState 随之销毁，
+        // 返回时列表从顶部重来 —— 用户刚翻到「对话」那组，回来又得重新滑一遍。
+        val settingsList = androidx.compose.foundation.lazy.rememberLazyListState()
+
+        // 首启自动进引导：**等配置真的读完**（vm.ready）再判断"有没有模型"，
+        // 否则会拿默认空状态误判，每次启动都跳一次。同一个进程只尝试一次 ——
+        // 用户按 ✕ 退出（"先不看"，不写 dismissedAt）之后不该马上又被弹回来。
+        var autoOnboardTried by remember { mutableStateOf(false) }
+        LaunchedEffect(vm.ready) {
+            if (!vm.ready || autoOnboardTried) return@LaunchedEffect
+            autoOnboardTried = true
+            val s = vm.state.value
+            if (s.onboard.dismissedAt > 0L || s.onboard.completedAt > 0L) return@LaunchedEffect
+            if (vm.chatModels().isNotEmpty()) return@LaunchedEffect
+            push(Screen.Onboard)
+        }
+
         AnimatedContent(
             targetState = screen,
             transitionSpec = {
@@ -457,8 +481,8 @@ fun AppRoot(vm: AppViewModel) {
                     Screen.Settings -> SettingsScreen(
                         vm = vm,
                         onBack = { popUp() },
+                        listState = settingsList,
                         onOpenModels = { push(Screen.Models) },
-                        onOpenMemory = { push(Screen.Memory) },
                         onOpenExtensions = { push(Screen.Extensions) },
                         onOpenUsage = { push(Screen.Usage) },
                         onOpenHelp = { push(Screen.Help) },
@@ -466,9 +490,12 @@ fun AppRoot(vm: AppViewModel) {
                         // 抽屉是进入设置页的入口，它一直开着；重看引导要"一步看到卡片"，
                         // 所以这里顺手把抽屉收掉，省掉用户再按一次返回
                         onReplayOnboard = {
+                            // 只重置引导状态并把引导页推上来：**不再清空当前会话**
+                            // （以前那样做只是为了把卡片放进空会话）
                             vm.replayOnboard()
                             closeDrawer()
                             closeAllScreens()
+                            push(Screen.Onboard)
                         },
                     )
 
@@ -477,12 +504,16 @@ fun AppRoot(vm: AppViewModel) {
                         onBack = { popUp() },
                     )
 
-                    Screen.Memory -> MemoryScreen(
-                        vm = vm,
-                        onBack = { popUp() },
-                    )
-
                     Screen.Help -> HelpScreen(onBack = { popUp() })
+
+                    Screen.Onboard -> OnboardingScreen(
+                        vm = vm,
+                        onClose = { popUp() },
+                        // 「添加模型」在引导页之上再 push 一层：配完返回，仍然回到引导页，
+                        // 此时这一步已自动打勾（步骤按现状推导）
+                        onOpenModels = { push(Screen.Models) },
+                        onPickWorkspace = { workspacePicker.launch(null) },
+                    )
 
                     Screen.SkillManager -> SkillScreen(
                         vm = vm,

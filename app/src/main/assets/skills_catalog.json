@@ -1,20 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-31",
+  "generatedAt": "2026-11-01",
   "skills": [
-    {
-      "id": "ppt-master",
-      "name": "PPT Master",
-      "summary": "生成或改写 PPTX 演示文稿",
-      "description": "AI-driven presentation workflow for generating editable PPTX decks: create from documents/outlines, fill native templates, or edit an existing deck.",
-      "version": "6.8.0",
-      "license": "MIT",
-      "author": "Hugo He",
-      "source": "github.com/hugohe3/ppt-master",
-      "hasScripts": true,
-      "entry": "SKILL.md",
-      "sizeBytes": 39482681
-    },
     {
       "id": "theme-factory",
       "name": "主题工厂",

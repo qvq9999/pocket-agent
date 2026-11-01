@@ -164,8 +164,10 @@ fun ToolCallRow(
 
             AnimatedVisibility(
                 visible = expanded,
-                enter = expandVertically(tween(150)) + fadeIn(tween(120)),
-                exit = shrinkVertically(tween(130)),
+                // 与思考块同一条规则：从**顶边**往下展开。默认的 Alignment.Bottom
+                // 会让内容从底边往上顶，用户点了卡片却看到上方内容被推走。
+                enter = expandVertically(tween(150), expandFrom = Alignment.Top) + fadeIn(tween(120)),
+                exit = shrinkVertically(tween(130), shrinkTowards = Alignment.Top),
             ) {
                 Column(Modifier.padding(start = 10.dp, end = 10.dp, bottom = 10.dp)) {
                     val detail = tool.summary.ifBlank { tool.preview.take(160) }

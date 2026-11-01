@@ -12,8 +12,8 @@ import java.util.zip.ZipInputStream
  * 一个内置技能的元信息。**不含内容** —— 只用来在菜单里列出条目。
  *
  * 内容放在 `assets/skills.zip` 里，首次启动解压到 `filesDir/skills/<id>/`。
- * 为什么打包成一个 zip 再解压，而不是把 1.3 万个文件直接铺进 assets：
- *  - APK 里多 1.3 万个条目会让打包和安装都变慢，zip 只有一个条目；
+ * 为什么打包成一个 zip 再解压，而不是把文件直接铺进 assets：
+ *  - 多条目会让打包和安装都变慢，zip 只有一个条目；
  *  - 解压后是普通文件，读手册比走 AssetManager 流快，也好做路径校验。
  */
 @Serializable
@@ -45,13 +45,13 @@ private data class SkillCatalogFile(
 /**
  * 内置技能的资源管理：目录读取、首次解压、文件读取。
  *
- * 只有「解压」是重的（37MB / 1.3 万个小文件），所以在 App 启动时后台做一次；
+ * 解压很轻（内置包只有几份手册），但仍放在 App 启动时后台做一次；
  * 菜单只读 catalog（几 KB），任何时候都能立刻弹出来。
  */
 object SkillStore {
 
     /** 资源包版本。换了 assets/skills.zip 就把这个数字 +1，旧副本会被重装 */
-    private const val PACK_VERSION = 3
+    private const val PACK_VERSION = 4
     private const val ZIP = "skills.zip"
     private const val CATALOG = "skills_catalog.json"
     private const val DIR = "skills"
@@ -201,7 +201,8 @@ object SkillStore {
                 tmp.deleteRecursively()
             }
             File(root, STAMP).writeText(PACK_VERSION.toString())
-            Log.i(TAG, "skills extracted: " + tree(ctx, "ppt-master", 99999).size + " files (ppt-master)")
+            val files = root.walkTopDown().count { it.isFile && it.name != STAMP }
+            Log.i(TAG, "skills extracted: " + files + " files, pack v" + PACK_VERSION)
             true
         }.onFailure { Log.w(TAG, "extract failed", it) }.getOrDefault(false)
     }

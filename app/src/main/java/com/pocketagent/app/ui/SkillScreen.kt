@@ -43,11 +43,11 @@ import kotlinx.coroutines.withContext
 /**
  * Skill 管理。
  *
- * 四个技能都是**内置**的（资源打在 APK 里，首次启动解压，不需要联网下载），
+ * 内置技能都是**纯手册**（资源打在 APK 里，首次启动解压，不需要联网下载），
  * 所以这一页的重点不是"安装"，而是"我现在装了哪些、它们有多大、哪些开着"。
  *
- * 一个必须写清楚的边界：脚本型技能（ppt-master）的手册能用，但它里面的 Python 脚本
- * 本机跑不了 —— 页面上的徽标和详情页的依赖说明都要如实讲，不能让人以为"装了就能跑脚本"。
+ * 一个必须写清楚的边界：本 App 不执行技能自带的脚本 —— 没有那个运行时。
+ * 页面上的徽标和详情页的依赖说明都要如实讲，不能让人以为"装了就能跑脚本"。
  */
 @Composable
 fun SkillScreen(
@@ -165,10 +165,9 @@ fun SkillScreen(
 
                 item {
                     Text(
-                        "脚本型技能会在本机 Linux 沙盒里执行代码，每次运行都要你确认；" +
-                            "没装 Linux 环境时只能读手册（指令模式）。" +
-                            "技能手册来自第三方：PPT Master 为 MIT（© Hugo He），" +
-                            "Theme Factory / Brand Guidelines / Doc Co-Authoring 为 Apache-2.0（Anthropic）。" +
+                        "技能只是一份操作手册：模型读它、按它的步骤用原生工具干活，" +
+                            "本机不会执行技能自带的任何脚本。" +
+                            "内置手册来自 Anthropic（Apache-2.0）；" +
                             "自定义安装的技能请自行确认来源，它们同样能拿到工作区文件的副本。",
                         style = ty().micro,
                         lineHeight = 16.sp,
@@ -323,7 +322,7 @@ private fun SkillListRow(
                     " · " + sizeText(meta.sizeBytes) + " · " +
                     when {
                         gone -> "已删除 · 重装可恢复"
-                        meta.hasScripts -> "含脚本"
+                        meta.hasScripts -> "含脚本（不执行）"
                         else -> "指令模式"
                     },
                 style = ty().micro,
@@ -403,18 +402,12 @@ fun SkillDetailScreen(
                             Hairline()
                             SettingRow(
                                 "运行条件",
-                                when {
-                                    meta?.hasScripts != true -> "指令模式 · 无额外依赖"
-                                    vm.pyStatus is AppViewModel.PyStatus.Ready ->
-                                        "指令模式 + 脚本（python3 已就绪）"
-                                    else -> "指令模式可用 · 脚本需在「扩展」里装 Python"
-                                },
+                                if (meta?.hasScripts == true)
+                                    "指令模式 · 手册可用，自带脚本不会被执行"
+                                else "指令模式 · 无额外依赖",
                                 onClick = {},
                                 clickable = false,
                                 icon = G.SLIDERS,
-                                iconTint = if (meta?.hasScripts != true ||
-                                    vm.pyStatus is AppViewModel.PyStatus.Ready
-                                ) pal().ok else pal().warn,
                             )
                         }
                     }
@@ -444,26 +437,6 @@ fun SkillDetailScreen(
                 item {
                     OutlineCard(padding = 0.dp) {
                         Column {
-                            if (meta?.hasScripts == true) {
-                                // 不在这一页装：Python 是**全局运行时**，挂在某个技能下面
-                                // 会让人以为"装了 A 的技能，B 就有 Python"。入口统一在扩展页
-                                SettingRow(
-                                    "Python 运行环境",
-                                    when (val py = vm.pyStatus) {
-                                        is AppViewModel.PyStatus.Ready -> "已就绪 · 在「扩展」里可重装"
-                                        is AppViewModel.PyStatus.Working -> py.stage
-                                        is AppViewModel.PyStatus.Failed -> "安装失败 · 去「扩展」重试"
-                                        else -> "未安装 · 去「设置 → 扩展」安装"
-                                    },
-                                    onClick = {
-                                        vm.notice = "Python 运行环境在「设置 → 扩展 → Python 运行环境」里安装"
-                                    },
-                                    icon = G.CUBE,
-                                    iconTint = if (vm.pyStatus is AppViewModel.PyStatus.Ready) pal().ok
-                                    else pal().warn,
-                                )
-                                Hairline()
-                            }
                             // 「重装」只对内置技能有意义：它重新解压的是 assets 里那份。
                             // 用户自己装的副本不在那个包里，显示出来只会让人点了没反应
                             if (meta?.custom != true) {

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  :root{
+    --ink:#1B1C1E; --muted:#5F6368; --hint:#8A9099; --faint:#A2A8B0;
+    --line:#E3E5EA; --lineSoft:#EDEFF3; --surface:#F7F8FA; --surfaceAlt:#F1F3F6;
+    --card:#FFFFFF; --accent:#1A73E8; --accentSoft:#E8F0FE; --accentInk:#12508F;
+    --ok:#1E7B4D; --okSoft:#E7F4EC; --warn:#8A5A00; --warnSoft:#FDF3E0; --media:#6B3FA0;
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+  body{margin:0;background:#E9EBEF;font-family:"Segoe UI","PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;color:var(--ink)}
+  .wrap{display:flex;flex-wrap:wrap;gap:20px;padding:18px;align-items:flex-start;max-width:880px}
+  .cap{font-size:12px;font-weight:600;color:#3C4043;margin:0 0 8px 3px}
+  .cap span{font-weight:400;color:#80868B}
+  .phone{width:393px;background:#fff;border-radius:20px;overflow:hidden;border:1px solid #DDE0E5;box-shadow:0 6px 20px rgba(0,0,0,.08);display:flex;flex-direction:column;height:600px}
+
+  .topbar{height:52px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--lineSoft)}
+  .topbar .t{font-size:16px;font-weight:700}
+  .body{flex:1;padding:0 16px;position:relative;overflow:hidden}
+
+  /* 现状：引导卡挤在空态里 */
+  .hello{font-size:34px;font-weight:700;color:var(--accent);margin:14px 0 6px}
+  .sub{font-size:11.5px;color:var(--faint);margin-bottom:12px}
+  .card{border:1px solid var(--line);border-radius:16px;padding:15px 16px}
+  .dots{display:flex;gap:5px}
+  .dots i{width:6px;height:6px;border-radius:50%;background:var(--line)}
+  .dots i.on{background:var(--accent);width:16px;border-radius:3px}
+  .h1{font-size:20px;font-weight:700;line-height:27px;margin:13px 0 7px}
+  .p{font-size:13px;line-height:20.5px;color:var(--muted)}
+  .tiny{font-size:11px;line-height:16px;color:var(--faint)}
+  .btn{margin-top:14px;height:42px;border-radius:12px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600}
+  .link{margin-top:10px;font-size:12px;color:var(--accent)}
+  .chip{display:inline-block;margin-top:10px;font-size:12.5px;color:var(--ink);border:1px solid var(--line);border-radius:50px;padding:7px 12px}
+
+  /* 方案：独立页 */
+  .pbar{height:3px;background:var(--surfaceAlt);display:flex;gap:3px}
+  .pbar i{flex:1;background:var(--lineSoft);border-radius:2px}
+  .pbar i.on{background:var(--accent)}
+  .nav{display:flex;align-items:center;padding:10px 14px 6px}
+  .nav .x{width:28px;height:28px;border-radius:50%;background:var(--surfaceAlt);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px}
+  .nav .step{margin-left:auto;font-size:11px;color:var(--hint)}
+  .stepwrap{padding:6px 20px 0}
+  .stitle{font-size:23px;font-weight:700;line-height:31px;margin:10px 0 8px}
+  .sdesc{font-size:13px;line-height:21px;color:var(--muted)}
+  .illus{margin-top:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:14px}
+  .irow{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--lineSoft);border-radius:11px;padding:10px 12px;margin-bottom:8px}
+  .irow:last-child{margin-bottom:0}
+  .iico{width:24px;height:24px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:12px}
+  .ilabel{font-size:12.5px;font-weight:600}
+  .imeta{font-size:10px;color:var(--hint)}
+  .state{margin-left:auto;font-size:10px;font-weight:700}
+  .state.done{color:var(--ok)}
+  .state.wait{color:var(--faint)}
+  .check{display:flex;align-items:center;gap:6px;margin-top:14px;font-size:11.5px}
+  .check .dot{width:16px;height:16px;border-radius:50%;background:var(--okSoft);color:var(--ok);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
+  .check .dot.off{background:var(--surfaceAlt);color:var(--faint)}
+  .foot{margin-top:auto;padding:12px 20px 18px;border-top:1px solid var(--lineSoft);display:flex;gap:10px;align-items:center}
+  .ghost{height:42px;border-radius:12px;border:1px solid var(--line);color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:13.5px;padding:0 16px}
+  .primary{flex:1;height:42px;border-radius:12px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600}
+  .primary.done{background:var(--ok)}
+
+  .note{width:100%;max-width:846px;font-size:11.5px;line-height:19px;color:#5F6368;background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+  .note b{color:#1B1C1E}
+  .note ul{padding-left:16px;margin:6px 0}
+  .note li{margin-bottom:4px}
+  .cols{display:flex;gap:18px;flex-wrap:wrap}
+  .cols>div{flex:1;min-width:250px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div>
+    <p class="cap">① 现状 <span>· 引导卡挤在会话空态区里</span></p>
+    <div class="phone">
+      <div class="topbar"><span style="font-size:18px">☰</span><span class="t">Pocket Agent</span></div>
+      <div class="body">
+        <div class="hello">你好</div>
+        <div class="sub">当前模型：未添加</div>
+        <div class="card">
+          <div class="dots"><i class="on"></i><i></i><i></i></div>
+          <div class="h1">先接一个模型</div>
+          <div class="p">Pocket Agent 不内置模型，你用自己的 API Key 接一个。Key 只存在这台手机里。</div>
+          <div class="btn">添加模型</div>
+          <div class="link">或者 先随便看看</div>
+          <div class="tiny" style="margin-top:10px">用你自己的 API Key，只存在这台手机里，不上传。</div>
+        </div>
+        <div class="chip">帮我写一段自我介绍</div>
+        <div class="chip">解释一下什么是向量数据库</div>
+        <div class="sub" style="margin-top:14px">v0.8.1 · 改文件前会先给你看改动，不满意可以撤销</div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <p class="cap">② 方案 · 第 1 步 <span>· 独立全屏页，进度 + 任务式一步</span></p>
+    <div class="phone">
+      <div class="pbar"><i class="on"></i><i></i><i></i></div>
+      <div class="nav"><div class="x">✕</div><div class="step">第 1 步 / 共 3 步</div></div>
+      <div class="stepwrap">
+        <div class="stitle">先接一个模型</div>
+        <div class="sdesc">它不内置模型。填入你自己的 API Key，请求直接从这台手机发到厂商，中途不经过我们。</div>
+        <div class="illus">
+          <div class="irow"><div class="iico" style="background:#EEF3FD">◇</div><div style="flex:1"><div class="ilabel">模型</div><div class="imeta">3 个可用 · mimo-v2.6-flash</div></div><div class="state done">✓</div></div>
+          <div class="irow"><div class="iico" style="background:#F4EEFB">📁</div><div style="flex:1"><div class="ilabel">工作区</div><div class="imeta">还没选 · AI 只能在这里读写</div></div><div class="state wait">待完成</div></div>
+          <div class="irow"><div class="iico" style="background:#E9F4EF">✎</div><div style="flex:1"><div class="ilabel">发第一句</div><div class="imeta">可以直接让它做 Word / PPT</div></div><div class="state wait">待完成</div></div>
+        </div>
+        <div class="check"><div class="dot">1</div><span>接模型</span><div class="dot off">2</div><span>选工作区</span><div class="dot off">3</div><span>开口说话</span></div>
+      </div>
+      <div class="foot">
+        <div class="ghost">跳过</div>
+        <div class="primary">添加模型</div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <p class="cap">③ 方案 · 第 3 步 <span>· 示例可直接点，底部主按钮变成「开始使用」</span></p>
+    <div class="phone">
+      <div class="pbar"><i class="on"></i><i class="on"></i><i class="on"></i></div>
+      <div class="nav"><div class="x">✕</div><div class="step">第 3 步 / 共 3 步</div></div>
+      <div class="stepwrap">
+        <div class="stitle">说第一句话</div>
+        <div class="sdesc">它能读写工作区里的文件，也能直接生成 Word 和 PPT —— 不需要额外下载任何东西。</div>
+        <div class="illus">
+          <div class="irow"><div class="iico" style="background:#EEF3FD">◇</div><div style="flex:1"><div class="ilabel">模型</div><div class="imeta">mimo-v2.6-flash</div></div><div class="state done">✓</div></div>
+          <div class="irow"><div class="iico" style="background:#F4EEFB">📁</div><div style="flex:1"><div class="ilabel">工作区</div><div class="imeta">测试 · 可读写</div></div><div class="state done">✓</div></div>
+          <div class="irow"><div class="iico" style="background:#E9F4EF">✎</div><div style="flex:1"><div class="ilabel">发第一句</div><div class="imeta">下面挑一个，或自己写</div></div><div class="state wait">待完成</div></div>
+        </div>
+        <div class="chip" style="margin-top:12px">把这里带日期的 Word 改个名</div>
+        <div class="chip">总结这个目录里的笔记</div>
+        <div class="chip">帮我做一份三页的 PPT</div>
+      </div>
+      <div class="foot">
+        <div class="ghost">上一步</div>
+        <div class="primary done">开始使用</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <div class="cols">
+      <div>
+        <b>现状的问题</b>
+        <ul>
+          <li>引导只存在于<b>会话空态区</b>：和"你好 / 示例 chip / 版本号"挤在一屏，内容一多就要滚，也不像"一段流程"</li>
+          <li>每步只有一个按钮，<b>看不到一共几步、做完会怎样</b>；做完前两步没有"已就绪"的反馈</li>
+          <li><b>重看会清空当前会话</b>：为了复习说明把正在进行的对话切走（<code>replayOnboard()</code> 里 <code>messages.clear()</code> + 切 sessionId）</li>
+          <li>「跳过」和「先随便看看」两套语义混在同一张卡里，后果不同却长得一样</li>
+        </ul>
+      </div>
+      <div>
+        <b>方案</b>
+        <ul>
+          <li>新增 <b><code>Screen.Onboard</code></b> 全屏页：<b>盖在会话页之上</b>，有 `‹` 返回；首启自动进入，设置里可重看</li>
+          <li>顶部 <b>3 段进度条</b>，右上角"第 N 步 / 共 3 步"</li>
+          <li>每页 = 大标题 + 一句说明 + <b>三步状态示意</b>（✓ / 待完成）+ 主按钮做那件事</li>
+          <li>底部固定：跳过 ｜ 主按钮；最后一步变 <b>开始使用</b></li>
+          <li><b>状态仍按现状推导</b>：加完模型回来这一步自动打勾；重看则固定从第 1 步翻，但按钮变成「下一步」</li>
+          <li><b>去掉清会话的副作用</b>：页面独立后不需要清空消息，直接切页</li>
+          <li>「先随便看看」<b>并入右上角 ✕</b>（临时关闭、不写状态）；底部只留「跳过」（写 dismissedAt）</li>
+        </ul>
+      </div>
+    </div>
+    <b>内容也要改的三处</b>
+    <ul>
+      <li>第 1 步补一句"请求直接从手机发到厂商，中途不经过我们"——现在只说了"只存本机"，没说"去哪了"</li>
+      <li>第 3 步的示例要把<b>新能力</b>摆出来（做 PPT / 做 Word），现在的示例只有"改名 / 总结笔记"</li>
+      <li>收尾给一句边界：<b>能做什么、不能做什么</b>（不做图片/图表、删除需要确认），比现在"也能直接把文件发进来"更有用</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

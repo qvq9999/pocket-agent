@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  :root{
+    --ink:#1B1C1E; --muted:#5F6368; --hint:#8A9099; --faint:#A2A8B0;
+    --line:#E3E5EA; --lineSoft:#EDEFF3; --surface:#F7F8FA; --surfaceAlt:#F1F3F6;
+    --card:#FFFFFF; --accent:#1A73E8; --accentSoft:#E8F0FE; --accentInk:#12508F;
+    --ok:#1E7B4D; --warn:#8A5A00; --warnSoft:#FDF3E0; --media:#6B3FA0; --bad:#B3261E;
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+  body{margin:0;background:#E9EBEF;font-family:"Segoe UI","PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;color:var(--ink)}
+  .wrap{display:flex;flex-wrap:wrap;gap:20px;padding:18px;align-items:flex-start;max-width:880px}
+  .cap{font-size:12px;font-weight:600;color:#3C4043;margin:0 0 8px 3px}
+  .cap span{font-weight:400;color:#80868B}
+  .phone{width:393px;background:#fff;border-radius:20px;overflow:hidden;border:1px solid #DDE0E5;box-shadow:0 6px 20px rgba(0,0,0,.08);display:flex;flex-direction:column;height:430px}
+  .top{padding:8px 12px;border-bottom:1px solid var(--lineSoft);display:flex;align-items:center;gap:6px}
+  .tt{font-size:14px;font-weight:600}
+  .ts{font-size:10.5px;color:var(--hint)}
+  .stage{flex:1;background:#FBFCFD;position:relative;display:flex;flex-direction:column;justify-content:flex-end;padding:0 12px 10px}
+  .ghost{background:#F4F5F7;border-radius:6px 16px 16px 16px;padding:10px 12px;font-size:12.5px;line-height:19px;color:#5F6368;margin-bottom:10px}
+
+  /* 控制条（方案 A） */
+  .bar{display:flex;align-items:center;gap:6px;padding:2px 2px 8px}
+  .chip{height:28px;border-radius:50px;display:flex;align-items:center;gap:5px;padding:0 9px;font-size:11.5px;font-weight:600;color:var(--muted)}
+  .chip.tap{background:var(--surfaceAlt)}
+  .chip.on{background:var(--modelChipBg,#EAF1FD);color:var(--accentInk)}
+  .chip.right{margin-left:auto}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none}
+  .composer{background:#fff;border:1px solid var(--line);border-radius:24px;padding:8px 9px;display:flex;align-items:center;gap:9px}
+  .plus{width:30px;height:30px;border-radius:50%;background:var(--surfaceAlt);display:flex;align-items:center;justify-content:center;flex:none}
+  .ph{flex:1;font-size:14px;color:var(--hint)}
+  .send{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;flex:none}
+
+  /* 弹层：现状 */
+  .popOld{width:292px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:5px;margin:0 0 8px auto}
+  .ohead{font-size:10.5px;font-weight:700;letter-spacing:.5px;color:var(--faint);padding:8px 9px 6px}
+  .orow{display:flex;align-items:center;gap:7px;padding:7px 9px;border-radius:11px}
+  .orow.sel{background:var(--accentSoft)}
+  .radio{width:16px;height:16px;border-radius:50%;border:2px solid #C9CDD3;flex:none}
+  .radio.on{background:var(--accent);border-color:var(--accent)}
+  .vmark{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex:none}
+  .omid{flex:1;min-width:0}
+  .oname{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .oid{font-size:11px;font-family:Consolas,monospace;color:var(--hint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .badge{font-size:10px;font-weight:600;padding:2.5px 6px;border-radius:6px;background:var(--surfaceAlt);color:var(--muted);flex:none}
+  .badge.sel{background:#fff;border:1px solid rgba(26,115,232,.35);color:var(--accentInk)}
+  .ofoot{font-size:10px;color:var(--faint);padding:8px 10px 4px;line-height:14px}
+
+  /* 弹层：方案 */
+  .popNew{width:248px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:6px;margin:0 0 8px auto;box-shadow:0 6px 18px rgba(0,0,0,.06)}
+  .nhead{font-size:10.5px;font-weight:700;letter-spacing:.4px;color:var(--faint);padding:8px 10px 6px}
+  .nrow{height:44px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:11px;position:relative}
+  .nrow.sel{background:#F3F7FE}
+  .nrow.sel::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:2.5px;border-radius:3px;background:var(--accent)}
+  .nico{width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center}
+  .nmid{flex:1;min-width:0}
+  .nt{font-size:13px;font-weight:600;line-height:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ns{font-size:10.5px;color:var(--hint);line-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ntick{width:14px;height:14px;flex:none;color:var(--accent)}
+  .nfoot{font-size:10px;color:var(--faint);padding:8px 10px 4px;line-height:14px}
+  .nsubwarn{color:var(--warn)}
+  .barcode{display:flex;align-items:flex-end;gap:9px;right:8px}
+
+  /* 锚定示意 */
+  .caret{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:7px solid #fff;margin-left:auto;margin-right:26px;filter:drop-shadow(0 -1px 0 var(--line))}
+
+  /* 现状问题标注 */
+  .flag{display:inline-block;font-size:10px;font-weight:700;color:#B3261E;background:#FDECEC;border-radius:50px;padding:2px 7px;margin-left:6px;vertical-align:2px}
+  .note{width:100%;max-width:846px;font-size:11.5px;line-height:19px;color:#5F6368;background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+  .note b{color:#1B1C1E}
+  .note ul{padding-left:16px;margin:6px 0}
+  .note li{margin-bottom:4px}
+  .cols{display:flex;gap:18px;flex-wrap:wrap}
+  .cols>div{flex:1;min-width:240px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ① 现状 · 模型弹层 -->
+  <div>
+    <p class="cap">① 现状 · 模型弹层 <span>· 292dp，两行文字 + 徽标</span></p>
+    <div class="phone">
+      <div class="top"><div><div class="tt">季度复盘报告</div><div class="ts">📁 测试 · 可读写</div></div></div>
+      <div class="stage">
+        <div class="popOld">
+          <div class="ohead">切换模型 · 右侧是思考档位数</div>
+          <div class="orow sel">
+            <div class="radio on"></div>
+            <div class="vmark" style="background:#FF6900">MI</div>
+            <div class="omid"><div class="oname">小米 MiMo</div><div class="oid">mimo-v2.6-flash</div></div>
+            <div class="badge sel">思考 2 档</div>
+          </div>
+          <div class="orow">
+            <div class="radio"></div>
+            <div class="vmark" style="background:#4D6BFE">DS</div>
+            <div class="omid"><div class="oname">DeepSeek</div><div class="oid">deepseek-chat</div></div>
+            <div class="badge">无档位</div>
+          </div>
+          <div class="ofoot">切换后思考档位与工具能力按新模型重置</div>
+        </div>
+        <div class="bar">
+          <div class="chip" style="background:#EAF1FD;color:#12508F"><span class="dot"></span>小米 MiMo</div>
+          <div class="chip on">✦ 思考 中</div>
+          <div class="chip right">🛡 允许</div>
+        </div>
+        <div class="composer"><div class="plus">＋</div><div class="ph">继续问，或让它改文件</div><div class="send">↑</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ② 方案 · 模型弹层 -->
+  <div>
+    <p class="cap">② 方案 · 模型弹层 <span>· 248dp，锚定胶囊，行内给后果</span></p>
+    <div class="phone">
+      <div class="top"><div><div class="tt">季度复盘报告</div><div class="ts">📁 测试 · 可读写</div></div></div>
+      <div class="stage">
+        <div class="popNew">
+          <div class="nhead">选择模型</div>
+          <div class="nrow sel">
+            <div class="nico"><div class="vmark" style="width:18px;height:18px;border-radius:6px;font-size:9px;background:#FF6900">MI</div></div>
+            <div class="nmid"><div class="nt">小米 MiMo</div><div class="ns">mimo-v2.6-flash · 思考 2 档</div></div>
+            <svg class="ntick" viewBox="0 0 14 14"><path d="M2.5 7.3l3 3 6-6.4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="nrow">
+            <div class="nico"><div class="vmark" style="width:18px;height:18px;border-radius:6px;font-size:9px;background:#4D6BFE">DS</div></div>
+            <div class="nmid"><div class="nt">DeepSeek</div><div class="ns nsubwarn">deepseek-chat · 不支持思考，切换会关掉</div></div>
+          </div>
+          <div class="nrow">
+            <div class="nico"><div class="vmark" style="width:18px;height:18px;border-radius:6px;font-size:9px;background:#10A37F">GP</div></div>
+            <div class="nmid"><div class="nt">GPT-4o</div><div class="ns">gpt-4o · 支持图片 · 思考 3 档</div></div>
+          </div>
+          <div class="nfoot" style="padding-top:4px">管理模型 ›</div>
+        </div>
+        <div class="bar">
+          <div class="chip" style="background:#EAF1FD;color:#12508F"><span class="dot"></span>小米 MiMo</div>
+          <div class="chip">✦ 思考 中</div>
+          <div class="chip right">🛡 允许</div>
+        </div>
+        <div class="composer"><div class="plus">＋</div><div class="ph">继续问，或让它改文件</div><div class="send">↑</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ③ 方案 · 思考弹层 -->
+  <div>
+    <p class="cap">③ 方案 · 思考弹层 <span>· 强度条替代彩色点，去掉等宽参数</span></p>
+    <div class="phone">
+      <div class="top"><div><div class="tt">季度复盘报告</div><div class="ts">📁 测试 · 可读写</div></div></div>
+      <div class="stage">
+        <div class="popNew">
+          <div class="nhead">思考程度 · 2 档</div>
+          <div class="nrow">
+            <div class="nico barcode"><div style="width:3px;height:7px;border-radius:2px;background:#D4D8DE"></div></div>
+            <div class="nmid"><div class="nt">关</div><div class="ns">最快，不花思考 token</div></div>
+          </div>
+          <div class="nrow sel">
+            <div class="nico barcode"><div style="width:3px;height:7px;border-radius:2px;background:#8AB4F8"></div><div style="width:3px;height:11px;border-radius:2px;background:#1A73E8"></div></div>
+            <div class="nmid"><div class="nt">中</div><div class="ns">默认，速度与深度平衡</div></div>
+            <svg class="ntick" viewBox="0 0 14 14"><path d="M2.5 7.3l3 3 6-6.4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="nrow">
+            <div class="nico barcode"><div style="width:3px;height:6px;border-radius:2px;background:#D4D8DE"></div><div style="width:3px;height:9px;border-radius:2px;background:#A8AEB8"></div><div style="width:3px;height:13px;border-radius:2px;background:#5F6368"></div></div>
+            <div class="nmid"><div class="nt">高</div><div class="ns">更慢更贵，复杂推理更稳</div></div>
+          </div>
+          <div class="nfoot">档位越高越慢越贵；不支持的档位不会出现</div>
+        </div>
+        <div class="bar">
+          <div class="chip"><span class="dot"></span>小米 MiMo</div>
+          <div class="chip" style="background:#EAF1FD;color:#12508F">✦ 思考 中</div>
+          <div class="chip right">🛡 允许</div>
+        </div>
+        <div class="composer"><div class="plus">＋</div><div class="ph">继续问，或让它改文件</div><div class="send">↑</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ④ 方案 · 权限弹层 -->
+  <div>
+    <p class="cap">④ 方案 · 权限弹层 <span>· 后果写进副标题，危险项就地变琥珀</span></p>
+    <div class="phone">
+      <div class="top"><div><div class="tt">季度复盘报告</div><div class="ts">📁 测试 · 可读写</div></div></div>
+      <div class="stage">
+        <div class="popNew">
+          <div class="nhead">访问权限 · 仅当前会话</div>
+          <div class="nrow">
+            <div class="nico"><svg width="16" height="16" viewBox="0 0 16 16" style="color:#5F6368"><path d="M8 1.6l5 1.9v4c0 3.4-2.1 5.4-5 6.5-2.9-1.1-5-3.1-5-6.5v-4z" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></div>
+            <div class="nmid"><div class="nt">只读</div><div class="ns">只能读和搜，改文件类工具不会出现</div></div>
+          </div>
+          <div class="nrow sel">
+            <div class="nico"><svg width="16" height="16" viewBox="0 0 16 16" style="color:#1A73E8"><path d="M8 1.6l5 1.9v4c0 3.4-2.1 5.4-5 6.5-2.9-1.1-5-3.1-5-6.5v-4z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.6 8l1.7 1.7 3.2-3.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <div class="nmid"><div class="nt">需确认</div><div class="ns">每次写入都给你看 diff</div></div>
+            <svg class="ntick" viewBox="0 0 14 14"><path d="M2.5 7.3l3 3 6-6.4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="nrow">
+            <div class="nico"><svg width="16" height="16" viewBox="0 0 16 16" style="color:#8A5A00"><path d="M8 1.6l5 1.9v4c0 3.4-2.1 5.4-5 6.5-2.9-1.1-5-3.1-5-6.5v-4z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 5v3.2M8 10.4v.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+            <div class="nmid"><div class="nt">全部允许</div><div class="ns nsubwarn">写入不再询问，只能靠撤销回退</div></div>
+          </div>
+          <div class="nfoot">越界路径与备份失败仍会硬拦</div>
+        </div>
+        <div class="bar">
+          <div class="chip"><span class="dot"></span>小米 MiMo</div>
+          <div class="chip">✦ 思考 中</div>
+          <div class="chip right" style="background:#FDF3E0;color:#8A5A00">🛡 允许</div>
+        </div>
+        <div class="composer"><div class="plus">＋</div><div class="ph">继续问，或让它改文件</div><div class="send">↑</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <div class="cols">
+      <div>
+        <b>弹层现在的问题</b>
+        <ul>
+          <li>同一个组件<b>三种行结构</b>：模型=两行+徽标，思考=单行+等宽参数，权限=两行说明；行高 40/34/44dp 各不相同</li>
+          <li>标题在<b>讲用法</b>（"右侧是思考档位数"），没说"你要选什么"</li>
+          <li>模型的<b>厂商名重复出现</b>在每一行，同厂三个模型就重复三遍</li>
+          <li>思考弹层把 <code>param</code>（high / 1024）直接漏给用户，这是实现细节</li>
+          <li>切换模型的后果（思考档位重置）写在<b>底部 10sp 小字</b>，选完才看到</li>
+          <li>三个弹层都固定在右下角 122dp 弹出，<b>不贴它自己的胶囊</b>；键盘一弹就飘得老远</li>
+        </ul>
+      </div>
+      <div>
+        <b>统一后的规则</b>
+        <ul>
+          <li>宽度 248dp、行高 44dp、结构固定：<b>图标 18 ＋ 标题 13 ＋ 副标题 10.5 ＋ 右侧 ✓</b></li>
+          <li>选中态 = 左侧 2.5dp 强调色竖条 ＋ 浅底（<b>不用 radio</b>：这里是"当前值"，不是表单）</li>
+          <li>标题只写名词；<b>后果写进副标题</b>，危险项就地变琥珀</li>
+          <li>弹层从<b>被点的胶囊正上方</b>长出，箭头指向它</li>
+          <li>思考档位用 1–3 格<b>强度条</b>代替四段彩色点，等宽参数不再外露</li>
+          <li>模型列表可滚动（最高 320dp），底部一个「管理模型 ›」，不再"最多 6 个"</li>
+        </ul>
+      </div>
+    </div>
+    <b>输入框逻辑要一起改的三处</b>
+    <ul>
+      <li><b>不支持思考的模型</b>：现在思考胶囊只是变灰且点不动，用户不知道为什么 → 隐藏该胶囊，或点开给一句"当前模型不支持思考"</li>
+      <li><b>切模型重置档位</b>：改成在目标行内提示（图② 第 2 行），而不是事后小字</li>
+      <li><b>空输入时的发送键</b>：降级为描边禁用态，别和"可发送"同色</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

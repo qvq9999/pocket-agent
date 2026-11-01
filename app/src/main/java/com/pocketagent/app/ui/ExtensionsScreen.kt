@@ -59,13 +59,11 @@ fun ExtensionsScreen(vm: AppViewModel, onBack: () -> Unit) {
     val busy = linux is AppViewModel.LinuxStatus.Working || vm.cleaningLinux
     var confirmRemove by remember { mutableStateOf(false) }
     var confirmClean by remember { mutableStateOf(false) }
-    // 进页面探一次 python3：已装/未装决定卡片怎么写。探测本身 200ms，不算负担
+    // 占用与可释放：装完、删完状况一变就自动刷新。遍历 rootfs 是两万多个文件的事，
+    // 既不能每帧算，也不能在主线程算 —— 由 VM 在 IO 上扫好后给结果
     androidx.compose.runtime.LaunchedEffect(linux) {
-        vm.refreshPythonStatus()
-        // 占用与可释放同步重量一次。挂在同一个 key 上：装完、删完状况一变就自动刷新
         vm.refreshLinuxUsage()
     }
-    val py = vm.pyStatus
     // 遍历 rootfs 是两万多个文件的事：既不能每帧算，也不能在主线程算 —— 由 VM 在 IO 上扫好后给结果
     val usage = vm.linuxUsage
     val sizeText = usage?.let { LinuxCleaner.sizeText(it.rootfsBytes) }.orEmpty()
@@ -289,151 +287,9 @@ fun ExtensionsScreen(vm: AppViewModel, onBack: () -> Unit) {
                 }
 
                 Spacer(Modifier.height(6.dp))
-                SectionLabel("脚本运行")
-
-                OutlineCard {
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                Modifier.size(30.dp).clip(CircleShape).background(pal().surfaceAlt),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Glyph(
-                                    G.DOC,
-                                    15.dp,
-                                    if (py is AppViewModel.PyStatus.Failed) pal().warn else pal().accent,
-                                    2.0f,
-                                )
-                            }
-                            Spacer(Modifier.width(13.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    "Python 运行环境",
-                                    style = ty().body,
-                                    fontWeight = FontWeight.Medium,
-                                    color = pal().ink,
-                                )
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    when (py) {
-                                        is AppViewModel.PyStatus.Working -> py.stage
-                                        is AppViewModel.PyStatus.Failed -> py.message
-                                        is AppViewModel.PyStatus.Ready -> "已就绪 · python3 + 核心依赖"
-                                        else -> when {
-                                            linux !is AppViewModel.LinuxStatus.Ready ->
-                                                "需要先安装上面的 Linux 环境"
-                                            else -> "未安装 · 下载约 60MB"
-                                        }
-                                    },
-                                    style = ty().micro,
-                                    color = if (py is AppViewModel.PyStatus.Failed) pal().warn else pal().muted,
-                                )
-                            }
-                            Spacer(Modifier.width(10.dp))
-
-                            // 和 Linux 那张卡同一个位置放操作：正在装时给"取消"，
-                            // 其余时候给"安装/重装"。开关在这里没有意义 ——
-                            // python 只能装或删，不能像工具那样"关掉"
-                            val ready = py is AppViewModel.PyStatus.Ready
-                            val working = py is AppViewModel.PyStatus.Working
-                            val canInstall = linux is AppViewModel.LinuxStatus.Ready
-                            Box(
-                                Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(
-                                        when {
-                                            working -> pal().surfaceAlt
-                                            !canInstall -> pal().surfaceAlt
-                                            else -> pal().accentSoft
-                                        }
-                                    )
-                                    .clickable(enabled = working || canInstall) {
-                                        if (working) vm.cancelPythonEnv() else vm.installPythonEnv()
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                            ) {
-                                Text(
-                                    when {
-                                        working -> "取消"
-                                        ready -> "重装"
-                                        else -> "安装"
-                                    },
-                                    fontSize = 11.5f.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = when {
-                                        working -> pal().muted
-                                        !canInstall -> pal().faint
-                                        else -> pal().accent
-                                    },
-                                )
-                            }
-                        }
-
-                        // 进度条与 Linux 那张完全同款：apt/pip 没有字节进度，
-                        // 所以给的是不确定态（固定比例短条），靠阶段文案说明在干什么
-                        if (py is AppViewModel.PyStatus.Working) {
-                            val p = vm.pyProgress
-                            Spacer(Modifier.height(12.dp))
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(5.dp)
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(pal().lineSoft),
-                            ) {
-                                Box(
-                                    Modifier
-                                        .fillMaxWidth(0.28f)
-                                        .height(5.dp)
-                                        .background(pal().accent),
-                                )
-                            }
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                buildString {
-                                    append(p?.stage ?: "准备中…")
-                                    val since = p?.startedAt ?: 0L
-                                    if (since > 0L) {
-                                        val sec = (android.os.SystemClock.elapsedRealtime() - since) / 1000
-                                        append(" · 已用 ")
-                                        if (sec >= 60) append("${sec / 60} 分 ${sec % 60} 秒")
-                                        else append("$sec 秒")
-                                    }
-                                },
-                                style = ty().micro,
-                                color = pal().muted,
-                            )
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-                        Hairline()
-                        Spacer(Modifier.height(10.dp))
-
-                        Text(
-                            "装的是 python3 + pip，加四个生成文档要用的包：" +
-                                "PyYAML、python-pptx、XlsxWriter、Pillow。技能手册里的脚本靠它跑。",
-                            style = ty().micro,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "只跑脚本时才用得到它；没有 Python 也能用技能 —— 手册本身是可读的，只是" +
-                                "脚本步骤要改用原生工具。",
-                            style = ty().micro,
-                            color = pal().hint,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "可选依赖（PDF 转换、配音等，含 AGPL 的 PyMuPDF）没有预装：" +
-                                "它们体积大、只服务少数支线，失败还会拖垮整个安装。",
-                            style = ty().micro,
-                            color = pal().hint,
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(6.dp))
                 Text(
-                    "更多能力（PDF 读取、表格加行、插入图片）计划做进原生解析层，不需要额外下载。",
+                    "Word / Excel / PPT 的读取、填写与新建都是原生做的，不占运行环境、不需要额外下载。" +
+                        "暂不支持图片、图表、母版与动画。",
                     style = ty().micro,
                     color = pal().hint,
                     modifier = Modifier.padding(horizontal = 2.dp),

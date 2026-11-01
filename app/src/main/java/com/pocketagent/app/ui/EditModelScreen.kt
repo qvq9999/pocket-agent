@@ -44,8 +44,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pocketagent.app.AppViewModel
 import com.pocketagent.app.EditDiscoverUi
 import com.pocketagent.app.data.Catalog
+import com.pocketagent.app.data.DEFAULT_CONTEXT_WINDOW
 import com.pocketagent.app.data.ModelProfile
 import com.pocketagent.app.data.VisionDisplay
+import com.pocketagent.app.data.declaredContextWindow
+import com.pocketagent.app.data.effectiveContextWindow
 import com.pocketagent.app.data.visionDisplay
 
 /**
@@ -345,6 +348,100 @@ fun EditModelScreen(
                             "另有 ${provider.mediaModels.size} 个媒体模型（图像/视频），不参与对话",
                             style = ty().micro,
                             modifier = Modifier.padding(14.dp),
+                        )
+                    }
+                }
+            }
+
+            // ── 上下文窗口 ──
+            // 只在"当前启用"的那个模型上改：单选语义下，实际发给 API 的也只有它。
+            // 留空 = 自动（按模型名识别，识别不出按 32k），不会因为不知道填多少而没法用。
+            val activeIdx = models.indexOfFirst { it.enabled }
+            if (activeIdx >= 0) {
+                val activeModel = models[activeIdx]
+                SectionLabel("上下文窗口", modifier = Modifier.padding(top = 16.dp))
+                OutlineCard(padding = 14.dp) {
+                    Column {
+                        FieldLabel(
+                            "这个模型能装多少 token 的历史",
+                            if (activeModel.contextWindow == null) {
+                                "自动识别：" + activeModel.effectiveContextWindow()
+                            } else {
+                                "手动指定"
+                            },
+                        )
+                        var ctxText by remember(activeModel.id) {
+                            mutableStateOf(
+                                (activeModel.contextWindow ?: activeModel.effectiveContextWindow()).toString()
+                            )
+                        }
+                        InputBox {
+                            BasicTextField(
+                                value = ctxText,
+                                onValueChange = { raw ->
+                                    ctxText = raw.filter { it.isDigit() }.take(7)
+                                    val v = ctxText.toIntOrNull()
+                                    models[activeIdx] = models[activeIdx].copy(
+                                        contextWindow = v?.takeIf { it >= 4_000 },
+                                    )
+                                },
+                                textStyle = ty().monoCode,
+                                singleLine = true,
+                                cursorBrush = SolidColor(pal().accent),
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Number,
+                                    imeAction = ImeAction.Done,
+                                ),
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text("token", fontSize = 11.sp, color = pal().muted)
+                        }
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            listOf(
+                                "32k" to 32_000,
+                                "128k" to 128_000,
+                                "200k" to 200_000,
+                                "1M" to 1_000_000,
+                            ).forEach { (label, v) ->
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .border(1.dp, pal().line, RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            ctxText = v.toString()
+                                            models[activeIdx] =
+                                                models[activeIdx].copy(contextWindow = v)
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                ) {
+                                    Text(label, fontSize = 11.sp, color = pal().muted)
+                                }
+                            }
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .border(1.dp, pal().line, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        ctxText = (
+                                            declaredContextWindow(activeModel.modelId)
+                                                ?: DEFAULT_CONTEXT_WINDOW
+                                            ).toString()
+                                        models[activeIdx] =
+                                            models[activeIdx].copy(contextWindow = null)
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            ) {
+                                Text("自动", fontSize = 11.sp, color = pal().muted)
+                            }
+                        }
+                        Text(
+                            "实际历史预算 = 这个数 − 约 14k（留给输出和系统提示），用到 70% 时自动压缩。" +
+                                "填得比模型真实窗口还大也不会更聪明：网关会拒绝，现在会自动缩短历史重试。",
+                            style = ty().micro,
+                            modifier = Modifier.padding(top = 8.dp),
                         )
                     }
                 }
