@@ -427,8 +427,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val sessionBuffers =
         mutableMapOf<String, androidx.compose.runtime.snapshots.SnapshotStateList<ChatMsg>>()
 
-    /** 正在后台跑的会话 key。切回某段会话时，据此决定"要不要显示停止按钮" */
-    private val runningKeys = mutableSetOf<String>()
+    /**
+     * 正在跑任务的会话 key（已落盘的用 sessionId，未落盘的用 [DRAFT_KEY]）。
+     *
+     * 用不可变 Set + 整体替换，而不是 MutableSet 原地增删：
+     * 侧边栏每一行都要读它决定要不要显示转圈，原地改不会触发重组。
+     */
+    var runningKeys by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** 某段会话是否正在跑任务 —— 侧边栏据此在卡片右侧显示加载圈 */
+    fun isSessionRunning(id: String): Boolean = id.isNotBlank() && id in runningKeys
 
     /** 当前会话对应的缓冲 key */
     private fun bufferKey(): String = sessionId.ifBlank { DRAFT_KEY }
@@ -1393,6 +1402,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         sid: String,
     ) {
         val msgs = buf
+        // 进侧边栏转圈的名单。用稳定 key：未落盘的草稿会话也要能标出来
+        val runKey = sid.ifBlank { DRAFT_KEY }
+        runningKeys = runningKeys + runKey
+        android.util.Log.i("PA-Run", "turn start sid=$sid key=$runKey")
         val level = model.thinkingLevels.firstOrNull { it.id == currentThinkingLevel(model) }
         // 工作区每轮重新取（见循环开头）：用户可能在任务跑到一半时换目录、或者解绑。
         // 以前它是 agentTurn 开头的局部常量，于是"已经解绑了"之后工具还拿着旧 fs
@@ -1783,6 +1796,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         } finally {
             // 这一轮属于的会话已经不在屏幕上了：主动落盘，否则进程一死结果就没了
         if (sid != sessionId) persistBackground(sid, msgs)
+        runningKeys = runningKeys - runKey
+        android.util.Log.i("PA-Run", "turn end sid=$sid")
         stopRunService()
             streaming = false
             // 取消（Activity 被回收 / 用户点停止）时，普通 suspend 调用会立刻再抛
@@ -2661,12 +2676,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopStreaming() {
+        // 排查用：打印是谁把任务停掉的。切换会话若意外走到这里，这条日志会指出调用方
+        android.util.Log.i(
+            "PA-Run",
+            "stopStreaming  running=$runningKeys  caller=" +
+                Throwable().stackTrace.drop(1).take(5)
+                    .joinToString(" <- ") { it.className.substringAfterLast('.') + "." + it.methodName }
+        )
         // 正在等用户点同意时按了停止：直接当成拒绝，否则这个协程会一直挂着
         approvalDeferred?.complete(ApprovalAnswer.DENY)
         approvalDeferred = null
         approval = null
         streamJob?.cancel()
         streaming = false
+        // 兜底：协程被取消时 agentTurn 尾部那段清理不会执行，
+        // 否则侧边栏的转圈会一直转下去
+        runningKeys = emptySet()
     }
 
     /** 换会话 / 新会话时清掉与这段对话相关的临时授权，避免"上一条会话允许过"被带过去 */
@@ -2852,6 +2877,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // 任务继续在后台往原缓冲里写，写完由它自己落盘。
         val leavingKey = bufferKey()
         val leavingRunning = streaming
+        android.util.Log.i("PA-Run", "openSession from=$leavingKey to=$id leavingRunning=$leavingRunning")
 
         // 切到另一段会话：界面上的"停止"不再是这段会话的，按目标会话的状态重置
         resetSessionToolState()

@@ -135,6 +135,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
@@ -2476,6 +2477,8 @@ internal fun DrawerPanel(
     drawerOpen: Boolean,
     sessions: List<com.pocketagent.app.data.Session>,
     currentSessionId: String,
+    /** 正在跑任务的会话 id 集合：卡片右侧要挂转圈 */
+    runningIds: Set<String> = emptySet(),
     collapsedGroups: Set<com.pocketagent.app.data.SessionGroup>,
     onToggleGroup: (com.pocketagent.app.data.SessionGroup) -> Unit,
     onNewChat: () -> Unit,
@@ -2730,6 +2733,8 @@ internal fun DrawerPanel(
                                         ?.modelLabel.orEmpty(),
                                     folder = if (s.inWorkspace) s.workspaceName else "",
                                     active = s.id == currentSessionId,
+                                    // 这段会话正在后台跑任务：卡片右边挂一个转圈
+                                    running = s.id in runningIds,
                                     onClick = { onOpenSession(s.id) },
                                     onLongClick = { onRequestDelete(s.id, s.title.ifBlank { "新会话" }) },
                                 )
@@ -2881,6 +2886,8 @@ private fun SessionRow(
     /** 工作区会话的目录名，普通会话为空 */
     folder: String,
     active: Boolean,
+    /** 这段会话正在跑任务。切走之后任务仍在继续，这是它唯一的可见凭据 */
+    running: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -2940,6 +2947,44 @@ private fun SessionRow(
                 }
             }
         }
+        if (running) {
+            Spacer(Modifier.width(8.dp))
+            RunningSpinner()
+        }
+    }
+}
+
+/**
+ * 会话在跑任务时的转圈。
+ *
+ * 自绘一段 280° 圆弧并让它匀速旋转，而不是用 CircularProgressIndicator：
+ * 后者自带 Material 的尺寸与配色，塞进 13.5sp 的行里会显得过大过粗。
+ */
+@Composable
+private fun RunningSpinner(size: androidx.compose.ui.unit.Dp = 13.dp) {
+    val angle by androidx.compose.animation.core.rememberInfiniteTransition(label = "sessionRun")
+        .animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                animation = tween(880, easing = androidx.compose.animation.core.LinearEasing),
+            ),
+            label = "sessionRunAngle",
+        )
+    val tint = pal().accent
+    androidx.compose.foundation.Canvas(
+        Modifier.size(size).rotate(angle),
+    ) {
+        drawArc(
+            color = tint,
+            startAngle = 0f,
+            sweepAngle = 280f,
+            useCenter = false,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                width = this.size.minDimension * 0.15f,
+                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+            ),
+        )
     }
 }
 

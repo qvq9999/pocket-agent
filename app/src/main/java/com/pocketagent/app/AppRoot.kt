@@ -384,6 +384,7 @@ fun AppRoot(vm: AppViewModel) {
                 drawerOpen = drawerOpen,
                 sessions = persisted.sessions,
                 currentSessionId = persisted.currentSessionId,
+                runningIds = vm.runningKeys,
                 // 折叠状态存在 VM 里：关抽屉再打开、转屏回来，两组都还是原来的开合状态
                 collapsedGroups = vm.collapsedGroups,
                 onToggleGroup = { vm.toggleGroup(it) },
