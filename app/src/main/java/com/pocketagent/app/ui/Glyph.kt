@@ -231,19 +231,36 @@ private fun DrawScope.draw24(kind: G, color: Color, stroke: Float) {
             drawPath(half, color)
         }
         G.REFRESH -> {
-            // 开口圆弧 + 箭头：表示"重新获取"
-            val r = 7.4f
+            // 开口圆弧 + **实心**三角箭头。
+            // 原来箭头是两条描边折线，在 15dp 下两条线间距不到 1px，糊成一坨，
+            // 看起来像个不认识的缺角图形 —— 小尺寸里只能用"面"，不能用"线"。
+            val r = 7.2f
             drawArc(
                 color = color,
-                startAngle = -55f,
-                sweepAngle = 285f,
+                startAngle = -50f,
+                sweepAngle = 275f,
                 useCenter = false,
                 topLeft = Offset((12f - r) * s, (12f - r) * s),
                 size = androidx.compose.ui.geometry.Size(2 * r * s, 2 * r * s),
                 style = st,
             )
-            drawLine(color, o(12.6f, 3.0f), o(18.6f, 4.4f), sw, StrokeCap.Round)
-            drawLine(color, o(18.6f, 4.4f), o(17.2f, 10.2f), sw, StrokeCap.Round)
+            // 箭头贴在弧线起点（右上），沿该点的切线方向指出去
+            val rad = Math.toRadians(-50.0)
+            val cx = 12f + r * Math.cos(rad).toFloat()
+            val cy = 12f + r * Math.sin(rad).toFloat()
+            val tangent = rad + Math.PI / 2
+            val dx = Math.cos(tangent).toFloat()
+            val dy = Math.sin(tangent).toFloat()
+            val head = 3.4f
+            val half = 1.9f
+            val arrow = Path().apply {
+                moveTo((cx + head * dx) * s, (cy + head * dy) * s)
+                // 三角形的两个底角 = 起点沿法线方向各偏 half
+                lineTo((cx - dy * half) * s, (cy + dx * half) * s)
+                lineTo((cx + dy * half) * s, (cy - dx * half) * s)
+                close()
+            }
+            drawPath(arrow, color)
         }
         G.SLIDERS -> {
             drawLine(color, o(4f, 7f), o(20f, 7f), sw, StrokeCap.Round)

@@ -1,7 +1,11 @@
 package com.pocketagent.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -436,6 +440,8 @@ fun SettingsScreen(
                                 // 有新版时整行提亮成 accent：这是唯一一个"点一下会改变结果"的行，
                                 // 平时保持和其它行一样的灰，避免抢注意力
                                 iconTint = if (vm.updateAvailable != null) pal().accent else null,
+                                // 检查中让图标转起来：镜像首次回源要几秒，只改一行小字容易被当成没反应
+                                iconSpin = vm.updateChecking,
                                 onClick = { vm.checkUpdate(manual = true) },
                             )
                         }
@@ -745,6 +751,11 @@ internal fun SettingRow(
      * 让"这一行会发生什么"只由这一个控件表达。
      */
     trailing: (@Composable () -> Unit)? = null,
+    /**
+     * 让左侧图标匀速旋转。只给"检查更新"这类有进行中的耗时操作的行用 ——
+     * 转起来就等于告诉用户"它在干活"，比只改一行小字更容易被注意到。
+     */
+    iconSpin: Boolean = false,
 ) {
     // 与会话记录列表的分组箭头完全同一套：同一个图标、同一套角度、同一个 160ms。
     // 用旋转而不是换图标（CHEV_RIGHT ↔ CHEV_DOWN）：换图标是硬切，旋转能让人
@@ -763,6 +774,21 @@ internal fun SettingRow(
     ) {
         if (icon != null) {
             val tint = iconTint ?: pal().muted
+            // 只在需要时建这条动画：常驻的 infiniteTransition 会一直产生帧，
+            // 而设置页有十几行图标，没必要让它们全都空转
+            val spinAngle = if (iconSpin) {
+                val t by rememberInfiniteTransition(label = "iconSpin").animateFloat(
+                    initialValue = 0f,
+                    targetValue = 360f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(900, easing = LinearEasing),
+                    ),
+                    label = "iconSpinAngle",
+                )
+                t
+            } else {
+                0f
+            }
             // 图标底用 tint 的低透明度版本：既有颜色识别，又不会让整页花掉
             Box(
                 Modifier
@@ -771,7 +797,10 @@ internal fun SettingRow(
                     .background(tint.copy(alpha = if (pal().isDark) 0.16f else 0.10f)),
                 contentAlignment = Alignment.Center,
             ) {
-                Glyph(icon, 15.dp, tint, 2f)
+                Glyph(
+                    icon, 15.dp, tint, 2f,
+                    modifier = Modifier.graphicsLayer(rotationZ = spinAngle),
+                )
             }
             Spacer(Modifier.width(11.dp))
         }

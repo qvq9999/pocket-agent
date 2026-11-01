@@ -1,8 +1,25 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
+
+/**
+ * 正式签名配置。密钥路径与密码放在根目录的 keystore.properties（已在 .gitignore 里）。
+ *
+ * 文件缺失时回退 debug 签名，保证别人 clone 下来能直接构建 —— 但那种包
+ * 无法覆盖安装线上版本（签名不同，系统直接拒绝），所以发版机器上必须有这个文件。
+ *
+ * 注意这里必须 import 后用 `Properties()`：在 .kts 里写 `java.util.Properties`
+ * 会把 `java` 解析成 android 的 java extension，报 Unresolved reference 'util'。
+ */
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val hasReleaseKey = keystoreProps.getProperty("storeFile")?.isNotBlank() == true
 
 android {
     namespace = "com.pocketagent.app"
@@ -18,8 +35,19 @@ android {
         applicationId = "com.pocketagent.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 44
-        versionName = "0.8.2"
+        versionCode = 45
+        versionName = "0.8.3"
+    }
+
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -31,9 +59,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // 本机只有 debug keystore。release 先用它签名，方便直接装机做性能对照
-            // （正式发版时换成自己的 release keystore 即可，其它配置不用动）
-            signingConfig = signingConfigs.getByName("debug")
+            // 有正式密钥就用它；没有才退回 debug（只够本地装机，不能用于发布）
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

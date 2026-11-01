@@ -31,19 +31,32 @@ object UpdateMirrors {
     /**
      * 前缀式加速站：`前缀 + 原始 URL` 就是镜像地址。
      *
-     * 这类公益站存活期不固定，所以顺序可以随时调整 —— **但不要把某个站写死成唯一源**，
-     * 它挂了的时候用户就彻底下不了。新增一个只需往这里加一行。
+     * 顺序是按实测调的（2026-11-01，对 `releases/latest/download/version.json`）：
+     *   gh-proxy.com   首次回源 9.3s，之后命中缓存 1.5s —— 唯一稳定可用的
+     *   ghproxy.net    超时
+     *   ghfast.top     超时
+     * 后两个在部分运营商线路下是通的，留着当备选，反正并发探测互不拖累。
+     * `hub.gitmirror.com` 已移除：域名解析即失败（0.03s 返回），发请求纯属浪费。
+     *
+     * 这类公益站存活期不固定，**别把某一个写成唯一源** —— 它挂了用户就彻底下不了。
      */
     private val PREFIXES = listOf(
         "https://gh-proxy.com/",
         "https://ghproxy.net/",
         "https://ghfast.top/",
-        "https://hub.gitmirror.com/",
     )
 
     private const val UA = "PocketAgent/1.0 (Android)"
 
-    private val GITHUB_RELEASE = Regex("^https://github\\.com/[^/]+/[^/]+/releases/download/")
+    /**
+     * 匹配 GitHub Release 的下载地址。
+     *
+     * **必须带 `latest` 这一层**：客户端实际用的是
+     * `github.com/<owner>/<repo>/releases/latest/download/<file>`，
+     * 上一版这条正则写成了 `releases/download/`，于是清单和安装包一次都没套上镜像，
+     * 国内用户点检查更新永远拿到"网络不可用"——这正是那个 bug 的根因。
+     */
+    private val GITHUB_RELEASE = Regex("^https://github\\.com/[^/]+/[^/]+/releases/")
 
     fun isGithubRelease(url: String): Boolean = GITHUB_RELEASE.containsMatchIn(url)
 
@@ -63,9 +76,11 @@ object UpdateMirrors {
     }
 
     /**
-     * 挑一个当前最快的源。探测全失败时返回 [origin]。
+     * 挑一个当前最快的源。探测全失败时**仍然返回镜像**，把直连留在候补队尾。
      *
-     * 每个探测独立计时（1.8s），互不等待：某个站连不上不会拖住其他站的判定。
+     * 不用"探测失败 = 不可用"来淘汰镜像：这类公益站首次请求要回源，
+     * 实测 gh-proxy 冷启动要 6 秒以上，用 2 秒的阈值去判会全部误杀，
+     * 结果就是回落直连、在国内又必然超时。宁可先试一个慢的镜像，也别直连。
      */
     suspend fun pick(ctx: Context, origin: String): String {
         if (!isGithubRelease(origin)) return origin
@@ -77,7 +92,7 @@ object UpdateMirrors {
             mirrors.map { url -> async { url to probe(url) } }.awaitAll()
         }
         val best = timed.filter { it.second != null }.minByOrNull { it.second!! }?.first
-            ?: return origin
+            ?: return mirrors.first()
 
         // 记下这次用的站，下次优先它 —— 但下次仍会重新探测，毕竟它会挂
         UpdatePrefs.setMirrorPrefix(ctx, PREFIXES.firstOrNull { best.startsWith(it) } ?: "")
@@ -86,12 +101,13 @@ object UpdateMirrors {
 
     /** 探测耗时（毫秒）；不可用返回 null */
     private suspend fun probe(url: String): Long? = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(1_800) {
+        // 6 秒：镜像冷启动回源常要 5 秒上下，2 秒会把能用的站全判死
+        withTimeoutOrNull(6_000) {
             var conn: HttpURLConnection? = null
             try {
                 conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 1_500
-                    readTimeout = 1_500
+                    connectTimeout = 5_000
+                    readTimeout = 5_000
                     instanceFollowRedirects = true
                     setRequestProperty("Range", "bytes=0-0")
                     setRequestProperty("User-Agent", UA)

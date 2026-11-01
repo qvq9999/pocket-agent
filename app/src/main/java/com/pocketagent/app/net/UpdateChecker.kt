@@ -97,7 +97,9 @@ object UpdateChecker {
                     if (text != null && !done.isCompleted) done.complete(text)
                 }
             }
-            withTimeoutOrNull(8_000) { done.await() }
+            // 15 秒：镜像首次要回源，实测 gh-proxy 冷启动 9 秒出头，
+            // 卡在 12 秒会因为一点点波动就判失败，用户看到的是"网络不可用"
+            withTimeoutOrNull(15_000) { done.await() }
         } finally {
             // 有一个成功就掐掉剩下的连接，别让它们在后台继续占着带宽
             parent.cancel()
@@ -108,8 +110,9 @@ object UpdateChecker {
         var conn: HttpURLConnection? = null
         try {
             conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 8_000
-                readTimeout = 8_000
+                // 12 秒：镜像经代理回源可到 9 秒以上，8 秒会把能成功的请求判成超时
+                connectTimeout = 12_000
+                readTimeout = 12_000
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", UA)
                 setRequestProperty("Accept", "application/json")
