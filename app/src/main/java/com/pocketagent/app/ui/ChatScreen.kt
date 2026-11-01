@@ -107,6 +107,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -221,6 +223,8 @@ fun ChatScreen(
     var lastNotice by remember { mutableStateOf("") }
     /** 顶栏 ⋯ 里的"删除这段会话"要二次确认：删了不可恢复 */
     var confirmDeleteSession by remember { mutableStateOf(false) }
+    /** 输入框右下角上下文百分比点开的明细 */
+    var showCtxDetail by remember { mutableStateOf(false) }
 
     // ── 弹层锚点：贴在被点的那颗胶囊下面，而不是固定右下角 ──
     // composerH 是输入区**实测**高度（含 ime/nav 内边距），所以键盘弹起时弹层自然跟着上去；
@@ -707,6 +711,9 @@ fun ChatScreen(
                 onOpenWorkspace = onPickWorkspace,
                 onMeasured = { composerH = it },
                 onChipPlaced = { p, x -> chipX = chipX + (p to x) },
+                ctxPercent = vm.ctxPercent(),
+                ctxReady = model != null,
+                onOpenCtx = { showCtxDetail = true },
             )
         }
 
@@ -907,6 +914,10 @@ fun ChatScreen(
                 },
                 onCancel = { confirmDeleteSession = false },
             )
+        }
+
+        if (showCtxDetail) {
+            CtxDetailDialog(vm) { showCtxDetail = false }
         }
     }
 }
@@ -1663,6 +1674,11 @@ private fun Composer(
     onClearQuote: () -> Unit = {},
     /** 点底部状态行换工作区：状态行已经收进卡片，不再单独占一行 */
     onOpenWorkspace: () -> Unit = {},
+    /** 当前历史占用百分比（0..100）。ctxReady=false 时（没选模型）整个指示不出现 */
+    ctxPercent: Int = 0,
+    ctxReady: Boolean = false,
+    /** 点百分比打开占用明细 */
+    onOpenCtx: () -> Unit = {},
     /** 把输入区实测高度回报给弹层用的锚点 */
     onMeasured: (Int) -> Unit = {},
     /** 三颗控制胶囊各自的窗口横坐标，弹层按它对齐 */
@@ -1908,6 +1924,43 @@ private fun Composer(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // ── 上下文占用：微型进度条 + 百分比 ──
+                // 放工作区左边、同一行：这一行本来就是"这段会话的运行时状态"，
+                // 两个信息性质一致，没必要为它再起一行。
+                if (ctxReady) {
+                    val pct = ctxPercent
+                    val tone = when {
+                        pct >= 90 -> pal().bad
+                        pct >= 70 -> pal().warn
+                        else -> pal().hint
+                    }
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .clickable(onClick = onOpenCtx)
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .width(34.dp)
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(pal().line),
+                        ) {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth((pct / 100f).coerceIn(0f, 1f))
+                                    .height(3.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(tone),
+                            )
+                        }
+                        Spacer(Modifier.width(5.dp))
+                        Text("$pct%", fontSize = 10.sp, color = tone)
+                    }
+                    Spacer(Modifier.width(2.dp))
+                }
                 val (label, tint) = when {
                     !hasModel -> "先添加模型" to pal().hint
                     // 没选工作区但有终端：文件工具不发，run_shell 照常可用。
@@ -3102,3 +3155,138 @@ private fun NoticeBar(text: String, onDismiss: () -> Unit) {
         )
     }
 }
+
+// ───────────────── 上下文占用明细 ─────────────────
+
+/**
+ * 输入框右下角那个百分比点开的明细。
+ *
+ * 用独立 Popup 而不是 PopoverKit 的锚点弹层：它从输入框内部弹出，
+ * 锚点要跟着键盘高度走，而这套锚点机制是给"三颗胶囊"设计的（贴底部对齐）。
+ * 这里居中弹一张卡更稳，也不会和胶囊弹层抢 z 序。
+ */
+@Composable
+private fun CtxDetailDialog(vm: AppViewModel, onClose: () -> Unit) {
+    val used = vm.ctxUsed
+    val budget = vm.ctxBudget
+    val pct = vm.ctxPercent()
+    val prompt = vm.ctxPrompt
+    val text = vm.ctxText
+    val tool = vm.ctxTool
+    val tone = when {
+        pct >= 90 -> pal().bad
+        pct >= 70 -> pal().warn
+        else -> pal().accent
+    }
+    val visible = remember { androidx.compose.animation.core.MutableTransitionState(false).apply { targetState = true } }
+
+    Popup(
+        alignment = Alignment.Center,
+        onDismissRequest = onClose,
+        properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = false),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(pal().scrim)
+                .clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClose,
+                ),
+        ) {
+            AnimatedVisibility(
+                visibleState = visible,
+                enter = fadeIn(tween(130)) + scaleIn(tween(170), initialScale = 0.94f),
+                modifier = Modifier.align(Alignment.Center),
+            ) {
+                Column(
+                    Modifier
+                        .width(300.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(pal().card)
+                        .border(1.dp, pal().line, RoundedCornerShape(18.dp))
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null,
+                            onClick = {},
+                        )
+                        .padding(start = 18.dp, end = 18.dp, top = 17.dp, bottom = 14.dp),
+                ) {
+                    Text("上下文占用", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = pal().ink)
+                    Spacer(Modifier.height(8.dp))
+
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(
+                            ctxK(used) + " / " + ctxK(budget),
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = pal().ink,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text("$pct%", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = tone)
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+                    // 分段条：三段按各自占预算的比例，剩下的空白就是"还能用多少"
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(pal().line),
+                    ) {
+                        if (prompt > 0) Box(Modifier.weight(prompt.toFloat()).fillMaxHeight().background(pal().accent))
+                        if (text > 0) Box(Modifier.weight(text.toFloat()).fillMaxHeight().background(pal().media))
+                        if (tool > 0) Box(Modifier.weight(tool.toFloat()).fillMaxHeight().background(pal().ok))
+                        val rest = (budget.coerceAtLeast(1) - used).coerceAtLeast(0)
+                        if (rest > 0) Box(Modifier.weight(rest.toFloat()).fillMaxHeight())
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+                    CtxLegend("系统提示", prompt, pal().accent)
+                    CtxLegend("对话内容", text, pal().media)
+                    CtxLegend("工具结果", tool, pal().ok)
+                    Spacer(Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("剩余可用", style = ty().micro, modifier = Modifier.weight(1f))
+                        Text(ctxK((safe0(budget) - used).coerceAtLeast(0)), style = ty().micro)
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "分母是模型窗口扣掉输出与系统提示预留后的额度，不是原始窗口。" +
+                            "占用到 70% 时会自动压缩早期内容，数字会回落。估算值，与实际计费有偏差。",
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                        color = pal().faint,
+                    )
+
+                    Spacer(Modifier.height(14.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        DialogButton("知道了", primary = true, onClick = onClose, primaryColor = pal().accent)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CtxLegend(label: String, value: Int, tint: androidx.compose.ui.graphics.Color) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(7.dp).clip(RoundedCornerShape(2.dp)).background(tint))
+        Spacer(Modifier.width(8.dp))
+        Text(label, fontSize = 12.5.sp, color = pal().ink, modifier = Modifier.weight(1f))
+        Text(ctxK(value), fontSize = 12.5.sp, color = pal().muted)
+    }
+}
+
+private fun safe0(n: Int): Int = if (n <= 0) 0 else n
+
+/** token 数写成 1.2k / 186k —— 这一屏只做量级判断，精确到个位没有意义 */
+private fun ctxK(n: Int): String =
+    if (n < 1000) "$n" else String.format(java.util.Locale.US, "%.1fk", n / 1000.0)

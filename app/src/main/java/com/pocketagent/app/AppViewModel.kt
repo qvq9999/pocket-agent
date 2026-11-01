@@ -906,6 +906,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // 上次进程在跑任务时死掉：不清不响才是真事故，这里把话说明白并给出口
             interrupted = state.value.runActive
             ready = true
+            // 恢复的会话一进来就要有正确的占用：否则输入框那行显示 0% 直到下一次发送
+            refreshCtxUsage()
         }
     }
 
@@ -919,7 +921,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun chatModels(): List<ModelProfile> = store.chatModels()
 
     fun select(modelProfileId: String) {
-        viewModelScope.launch { store.selectModel(modelProfileId) }
+        viewModelScope.launch {
+            store.selectModel(modelProfileId)
+            // 换模型 = 分母变了（窗口不同），百分比必须立刻重算
+            refreshCtxUsage()
+        }
     }
 
     fun removeProvider(providerId: String) {
@@ -1143,6 +1149,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun send(text: String) {
         val input = text.trim()
         if (input.isEmpty() || streaming) return
+        // 新一轮：保活提示重新计一次
+        keepAliveHinted = false
 
         val pair = store.selected()
         if (pair == null) {
@@ -1740,12 +1748,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             at = System.currentTimeMillis(),
             elapsedMs = spentMs.coerceAtLeast(0L),
         )
+        // 这一轮结束才知道最终占用：输入框右下角的百分比在这里更新
+        refreshCtxUsage()
     }
 
-    /** 前台服务只是保活手段，失败了也不该影响对话本身 */
+    /** 前台服务只是保活手段，失败了不该影响对话本身，但**必须让用户知道** */
     private fun startRunService(text: String) {
-        runCatching { AgentRunService.start(getApplication(), text) }
+        val ok = AgentRunService.start(getApplication(), text)
+        // 每轮只提示一次：这个函数每步都会调，否则会刷屏
+        if (!ok && !keepAliveHinted) {
+            keepAliveHinted = true
+            notice = "后台保活没起来：切到别的应用可能会中断这一轮"
+        }
     }
+
+    /** 本轮是否已经提示过保活失败 */
+    private var keepAliveHinted = false
 
     private fun stopRunService() {
         runCatching { AgentRunService.stop(getApplication()) }
@@ -2591,6 +2609,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             snap?.let { store.saveSession(it) }
             store.setCurrentSession("")
         }
+        refreshCtxUsage()
     }
 
     // ─────────── 会话（历史列表 / 切换 / 删除） ───────────
@@ -2735,6 +2754,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             snap?.let { store.saveSession(it, makeCurrent = false) }
             store.setCurrentSession(id)
         }
+        refreshCtxUsage()
     }
 
     fun deleteSession(id: String) {
@@ -2936,6 +2956,108 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 正在清理。和安装/删除互斥 —— 一边 apt 在写缓存一边删，包会坏 */
     var cleaningLinux by mutableStateOf(false)
         private set
+
+    // ─────────── 上下文占用 ───────────
+
+    /**
+     * 当前这段会话的历史占用（token，估算）与可用预算。
+     *
+     * 分母用 [historyTokenBudget] 而不是模型原始窗口：它已经扣掉了输出与系统提示的预留。
+     * 显示原始窗口会让人误以为"200k 的模型用到 194k 才溢出"，和实际行为对不上。
+     */
+    var ctxUsed by mutableStateOf(0)
+        private set
+
+    var ctxBudget by mutableStateOf(0)
+        private set
+
+    /** 详情弹层里拆开看的三段 */
+    var ctxPrompt by mutableStateOf(0)
+        private set
+
+    var ctxText by mutableStateOf(0)
+        private set
+
+    var ctxTool by mutableStateOf(0)
+        private set
+
+    /**
+     * 重算一次。
+     *
+     * **只在轮次结束、切换会话、切换模型时调用**：这里要遍历全部消息做估算，
+     * 挂在 Composable 里按帧算会直接掉帧。算出来的值只是估算（±10%），
+     * 但用于"还剩多少余量"这类相对判断足够了。
+     */
+    fun refreshCtxUsage() {
+        val model = selectedModel()
+        if (model == null) {
+            ctxUsed = 0; ctxBudget = 0; ctxPrompt = 0; ctxText = 0; ctxTool = 0
+            return
+        }
+        ctxBudget = historyTokenBudget(model)
+        ctxPrompt = com.pocketagent.app.net.TokenEstimator.estimate(
+            systemPrompt(workspace != null)
+        )
+
+        var text = 0
+        var tool = 0
+        messages.forEach { m ->
+            // apiText 才是真正发出去的内容（含 <file> 引用），为空才退回 text
+            val body = m.apiText.ifBlank { m.text }
+            if (m.role == "tool") {
+                tool += com.pocketagent.app.net.TokenEstimator.estimate(body)
+            } else {
+                text += com.pocketagent.app.net.TokenEstimator.estimate(body) +
+                    m.calls.sumOf { it.arguments.length / 4 }
+                // 图片按每张 1000 token 粗算，与实际厂商计费口径接近
+                text += m.images.size * 1_000
+            }
+        }
+        ctxText = text
+        ctxTool = tool
+        ctxUsed = ctxPrompt + text + tool
+    }
+
+    /** 占用百分比，0..100。没有模型时是 0，不要显示成 100% */
+    fun ctxPercent(): Int =
+        if (ctxBudget <= 0) 0 else ((ctxUsed * 100.0) / ctxBudget).toInt().coerceIn(0, 100)
+
+    // ─────────── 后台运行保护 ───────────
+
+    /** 是否已被系统排除在电池优化之外（= 允许后台运行） */
+    fun batteryOptimizationIgnored(): Boolean {
+        val app = getApplication<Application>()
+        val pm = app.getSystemService(android.content.Context.POWER_SERVICE)
+            as? android.os.PowerManager ?: return true
+        return runCatching { pm.isIgnoringBatteryOptimizations(app.packageName) }
+            .getOrDefault(true)
+    }
+
+    /**
+     * 申请加入电池优化白名单。
+     *
+     * 优先弹系统那个"是否允许后台运行"的对话框；个别 ROM 没实现这个 action
+     * （startActivity 抛 ActivityNotFoundException），退回电池优化列表页让用户自己找。
+     *
+     * 注意这只解决标准 Android 那一层。HyperOS / ColorOS / OriginOS 还有独立的
+     * 「自启动」「后台运行」「应用速冻」开关，没有公开 API，只能靠文案引导。
+     */
+    fun requestIgnoreBatteryOptimization() {
+        val app = getApplication<Application>()
+        val direct = Intent(
+            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:" + app.packageName),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val started = runCatching { app.startActivity(direct) }.isSuccess
+        if (!started) {
+            runCatching {
+                app.startActivity(
+                    Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }
+    }
 
     // ─────────── 版本更新 ───────────
 

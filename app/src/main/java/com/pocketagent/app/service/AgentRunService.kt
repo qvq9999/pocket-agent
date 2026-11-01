@@ -121,13 +121,19 @@ class AgentRunService : Service() {
         const val ACTION_STOP = "com.pocketagent.app.action.STOP_RUN"
         const val EXTRA_TEXT = "text"
 
-        /** 开始或更新。在用户可见的界面里调用，不会触发 Android 12 的后台启动限制 */
-        fun start(ctx: Context, text: String) {
+        /**
+         * 开始或更新。在用户可见的界面里调用，不会触发 Android 12 的后台启动限制。
+         *
+         * 返回是否真的发出去了 —— 调用方要能知道"保活没起来"。
+         * 以前这里一律 runCatching 吞掉，服务起不来时用户毫不知情，
+         * 只会在切后台回来发现任务停在半路。
+         */
+        fun start(ctx: Context, text: String): Boolean {
             val i = Intent(ctx, AgentRunService::class.java).putExtra(EXTRA_TEXT, text)
-            runCatching {
+            return runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i)
                 else ctx.startService(i)
-            }
+            }.isSuccess
         }
 
         /** 结束。走 stopService → onDestroy → stopForeground(REMOVE)，通知一并撤掉 */

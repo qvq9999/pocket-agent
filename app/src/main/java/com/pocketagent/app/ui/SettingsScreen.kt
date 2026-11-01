@@ -89,6 +89,23 @@ fun SettingsScreen(
     var showKeyDialog by remember { mutableStateOf(false) }
 
     val ctx = androidx.compose.ui.platform.LocalContext.current
+
+    /**
+     * 后台运行权限状态。每次回到前台都重查：
+     * 用户在系统对话框里点了"允许"之后回来，这一行必须立刻变成「已允许」，
+     * 否则他会以为没生效，反复点。
+     */
+    var batteryOk by remember { mutableStateOf(vm.batteryOptimizationIgnored()) }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                batteryOk = vm.batteryOptimizationIgnored()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     fun openUrl(url: String) {
         // 没有浏览器时 startActivity 会抛 ActivityNotFoundException，不能让它冒到主线程
         runCatching {
@@ -204,6 +221,16 @@ fun SettingsScreen(
                                 icon = G.INFO,
                                 iconTint = pal().accent,
                                 onClick = onOpenUsage,
+                            )
+                            Hairline()
+                            SettingRow(
+                                title = "后台运行保护",
+                                value = if (batteryOk) "已允许" else "未允许",
+                                desc = if (batteryOk) "切到别的应用时长任务会继续执行"
+                                else "长任务切后台可能被系统中断，点这里允许后台运行",
+                                icon = G.SHIELD,
+                                iconTint = if (batteryOk) pal().ok else pal().warn,
+                                onClick = { vm.requestIgnoreBatteryOptimization() },
                             )
                         }
                     }
@@ -339,7 +366,7 @@ fun SettingsScreen(
                             SettingRow(
                                 title = "AnySearch Key",
                                 value = if (keyMasked.isBlank()) "未填" else keyMasked,
-                                desc = if (keyMasked.isBlank()) "不填也能用，匿名额度 300 次/天"
+                                desc = if (keyMasked.isBlank()) "不填也能用，普通额度 1000 次/天"
                                 else "已设置，额度提到 1500 次/天",
                                 icon = G.SHIELD,
                                 iconTint = pal().media,

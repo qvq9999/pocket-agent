@@ -19,6 +19,12 @@
         本应用走自建 Release 分发，不经过商店，因此不受限。
     -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!--
+        长任务保活：把应用加进「电池优化」白名单。
+        没有它，国产 ROM 会在灭屏/切后台时把进程冻结，前台服务也拦不住 ——
+        用户看到的是"任务跑到一半停了"。跳转是标准 API，但需要先声明这个权限。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!--
         Android 11+ 的包可见性：不声明 <queries> 时，queryIntentActivities 只看得见本应用自己。

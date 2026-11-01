@@ -22,8 +22,15 @@ object SearchSettings {
     private const val K_DAY = "quota_day"
     private const val K_COUNT = "quota_count"
 
-    /** 匿名额度是全网共享的，本地必须自己踩刹车，别让一次 Agent 循环把它抽干 */
-    private const val CAP_ANON = 300
+    /**
+     * 本地每天的调用上限，只用来自己踩刹车 —— 服务端真实额度比这高，
+     * 但匿名额度是全站共享的，一次 Agent 循环连续搜索很容易把它抽干，
+     * 到时候用户拿到的是"额度已用尽"而不是一条条搜索结果。
+     *
+     * 数值与服务端公开口径一致（普通用户 1000 次/天），不要在界面上写成一个更小的数字：
+     * 用户看到"300 次"会以为被 App 私吞了额度。
+     */
+    private const val CAP_ANON = 1_000
     private const val CAP_KEYED = 1_500
 
     private fun sp(ctx: Context): SharedPreferences =
