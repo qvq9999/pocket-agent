@@ -2694,11 +2694,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runningKeys = emptySet()
     }
 
-    /** 换会话 / 新会话时清掉与这段对话相关的临时授权，避免"上一条会话允许过"被带过去 */
-    private fun resetSessionToolState() {
+    /**
+     * 换会话 / 新会话时清掉与这段对话相关的临时授权，避免"上一条会话允许过"被带过去。
+     *
+     * [keepRunningApproval] 是给"另一段会话还在跑"用的：那种情况下如果把它正在等待的
+     * 审批清掉，协程会永远等在一个没人会 complete 的 deferred 上 ——
+     * 表现就是"切了个会话，任务停在那儿再也不动"。宁可把审批框留着让用户回来处理。
+     */
+    private fun resetSessionToolState(keepRunningApproval: Boolean = false) {
         sessionAllowed.clear()
-        approval = null
-        approvalDeferred = null
+        if (!keepRunningApproval) {
+            approval = null
+            approvalDeferred = null
+        }
         toolRunner.resetFingerprints()
     }
 
@@ -2727,7 +2735,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // 上一段还在跑就让它跑完：它的 agentTurn 持有自己那块缓冲，不依赖界面
         val leavingKey = bufferKey()
         val leavingRunning = streaming
-        resetSessionToolState()
+        resetSessionToolState(keepRunningApproval = leavingRunning)
         val snap = snapshotSession()
 
         // 新会话换一块干净缓冲。旧的那块如果还有任务在写就留着，否则回收
@@ -2880,7 +2888,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         android.util.Log.i("PA-Run", "openSession from=$leavingKey to=$id leavingRunning=$leavingRunning")
 
         // 切到另一段会话：界面上的"停止"不再是这段会话的，按目标会话的状态重置
-        resetSessionToolState()
+        resetSessionToolState(keepRunningApproval = leavingRunning)
         val snap = snapshotSession()
 
         // 目标会话自己的缓冲。已经载入过就复用（后台可能刚往里面写过东西），
