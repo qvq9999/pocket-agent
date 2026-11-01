@@ -35,8 +35,8 @@ android {
         applicationId = "com.pocketagent.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 47
-        versionName = "0.8.5"
+        versionCode = 48
+        versionName = "0.8.6"
     }
 
     signingConfigs {

@@ -3,6 +3,12 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!--
+        长任务期间持有 Wi-Fi 锁。灭屏后 Wi-Fi 会进省电模式、发包间隔拉长，
+        SSE 长连接常在这一刻无声断掉；没有这两条权限，WifiLock 创建出来也拿不到。
+    -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <!-- 接局域网模型（Ollama / LM Studio）在 Android 16 起需要该运行时权限 -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
     <!-- 多步任务执行期间的前台服务：切后台/锁屏不被回收 -->

@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -34,6 +35,18 @@ class AgentRunService : Service() {
     /** 部分唤醒锁：屏幕灭掉后 CPU 仍能跑完当前这一步，而不是被 Doze 掐在半路 */
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /**
+     * Wi-Fi 高性能锁。
+     *
+     * 唤醒锁只保证 CPU 不睡，**管不住网卡**：灭屏几十秒后 Wi-Fi 会自己进省电模式，
+     * 发包间隔拉长，长连接（SSE 流式）就那么无声无息地断了 ——
+     * 表现是"回来发现消息停在一半"，而日志里既没有异常也没有超时。
+     *
+     * 用 LOW_LATENCY（API 29+）而不是 HIGH_PERF：前者是给"低延迟交互"用的，
+     * 同样不让网卡打盹，但不会把发射功率顶满，耗电比 HIGH_PERF 低一档。
+     */
+    private var wifiLock: WifiManager.WifiLock? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -51,6 +64,7 @@ class AgentRunService : Service() {
             return START_NOT_STICKY
         }
         acquireWakeLock()
+        acquireWifiLock()
         return START_NOT_STICKY
     }
 
@@ -70,9 +84,27 @@ class AgentRunService : Service() {
         }
     }
 
+    private fun acquireWifiLock() {
+        if (wifiLock?.isHeld == true) return
+        val wm = applicationContext.getSystemService(WifiManager::class.java) ?: return
+        // LOW_LATENCY 要 API 29；26~28 退回 HIGH_PERF，行为等价只是更费电
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            @Suppress("DEPRECATION")
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        wifiLock = wm.createWifiLock(mode, "PocketAgent:agent-run").apply {
+            setReferenceCounted(false)
+            runCatching { acquire() }
+        }
+    }
+
     override fun onDestroy() {
         runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
         wakeLock = null
+        runCatching { if (wifiLock?.isHeld == true) wifiLock?.release() }
+        wifiLock = null
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
         super.onDestroy()
     }

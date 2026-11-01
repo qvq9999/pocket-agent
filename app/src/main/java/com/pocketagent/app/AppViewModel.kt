@@ -908,6 +908,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             ready = true
             // 恢复的会话一进来就要有正确的占用：否则输入框那行显示 0% 直到下一次发送
             refreshCtxUsage()
+            // 上次是被系统干掉、还有一轮没跑完：不用等用户点，自己接上
+            if (interrupted) autoResumeInterrupted()
+        }
+    }
+
+    /**
+     * 进程上次被杀、还有一轮没跑完时，自动接上。
+     *
+     * 三条克制：
+     * 1. **只试一次**。失败就停、留给用户手动点「继续」——自动重试会在模型侧
+     *    反复烧 token，而那一刻用户很可能根本没在看屏幕。
+     * 2. **卡在工具审批的不自动续**。那种状态需要用户回答"允不允许"，
+     *    重跑等于把已经问过的问题再问一遍，还可能被当成默认拒绝。
+     * 3. **延迟 900ms**，让界面先渲染出来。否则用户看到的首帧就是"正在生成"，
+     *    会误以为是自己刚发起的请求。
+     */
+    private fun autoResumeInterrupted() {
+        viewModelScope.launch {
+            delay(900)
+            if (!interrupted || streaming) return@launch
+            if (approval != null) return@launch
+            if (store.selected() == null) return@launch
+            if (messages.none { it.role == "user" }) return@launch
+            resumeInterrupted()
+            if (streaming) {
+                notice = "上次被打断，已自动接着上一轮继续"
+            }
         }
     }
 
