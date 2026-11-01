@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.documentfile.provider.DocumentFile
@@ -62,6 +63,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
+
+/** 还没落盘的新会话在缓冲表里的 key */
+private const val DRAFT_KEY = "\u0000draft"
 
 private const val TRANSLATE_PROMPT = """你是翻译引擎。把用户发来的内容译成简体中文。
 规则：
@@ -399,7 +403,44 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var catalog by mutableStateOf<CatalogFile?>(null)
         private set
 
-    val messages = mutableStateListOf<ChatMsg>()
+    /**
+     * 界面上正在显示的这段会话的消息。
+     *
+     * 用 var 而不是固定的一个 list：**每段会话各有一个自己的列表**，
+     * 切会话只是换引用，不搬数据。正在后台跑的那段会话继续往它自己的列表里写，
+     * 与当前显示的这段互不干扰 —— 这就是"切走不打断"的全部机制。
+     *
+     * 换引用要能触发重组，所以包在 mutableStateOf 里；列表内部元素的变化
+     * 由 SnapshotStateList 自己通知，两层都要。
+     */
+    var messages by mutableStateOf<androidx.compose.runtime.snapshots.SnapshotStateList<ChatMsg>>(
+        mutableStateListOf()
+    )
+        private set
+
+    /**
+     * 每段会话的消息缓冲。key 是 sessionId；还没落盘的新会话统一用 [draftKey]。
+     *
+     * 不清理已结束会话的缓冲会一直涨，所以在 [openSession] 里把"既没在跑、
+     * 又不是当前会话"的那些丢掉。判断依据是 [runningKeys]。
+     */
+    private val sessionBuffers =
+        mutableMapOf<String, androidx.compose.runtime.snapshots.SnapshotStateList<ChatMsg>>()
+
+    /** 正在后台跑的会话 key。切回某段会话时，据此决定"要不要显示停止按钮" */
+    private val runningKeys = mutableSetOf<String>()
+
+    /** 当前会话对应的缓冲 key */
+    private fun bufferKey(): String = sessionId.ifBlank { DRAFT_KEY }
+
+    /** 取（必要时创建）某段会话的缓冲 */
+    private fun bufferOf(key: String): androidx.compose.runtime.snapshots.SnapshotStateList<ChatMsg> =
+        sessionBuffers.getOrPut(key) { mutableStateListOf() }
+
+    /** 把界面切到某段会话的缓冲上 */
+    private fun bindBuffer(key: String) {
+        messages = bufferOf(key)
+    }
     var streaming by mutableStateOf(false)
         private set
 
@@ -1245,7 +1286,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // 用户消息一入列就先落盘：哪怕进程随后被杀，输入也不会白丢
         persistCurrentSession()
 
-        streamJob = viewModelScope.launch { agentTurn(provider, model, apiKey, draftId) }
+        streamJob = viewModelScope.launch { agentTurn(provider, model, apiKey, draftId, messages, sessionId) }
     }
 
     /** 追加一条空的 assistant 草稿（会立刻显示"正在思考"），返回它的 id */
@@ -1293,7 +1334,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val draftId = appendDraft(provider, model)
         streaming = true
         persistCurrentSession()
-        streamJob = viewModelScope.launch { agentTurn(provider, model, apiKey, draftId) }
+        streamJob = viewModelScope.launch { agentTurn(provider, model, apiKey, draftId, messages, sessionId) }
     }
 
     /**
@@ -1331,7 +1372,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val draftId = appendDraft(provider, model)
         streaming = true
         persistCurrentSession()
-        streamJob = viewModelScope.launch { agentTurn(provider, model, apiKey, draftId) }
+        streamJob = viewModelScope.launch { agentTurn(provider, model, apiKey, draftId, messages, sessionId) }
     }
 
     // ─────────── Agent 循环：模型 ⇄ 工具 ───────────
@@ -1346,7 +1387,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         model: ModelProfile,
         apiKey: String,
         firstDraftId: Long,
+        /** 这段会话自己的缓冲：切走之后任务仍往里写，不受界面切换影响 */
+        buf: SnapshotStateList<ChatMsg>,
+        /** 发起时的会话 id。切走之后界面上的 sessionId 会变，落盘要靠它 */
+        sid: String,
     ) {
+        val msgs = buf
         val level = model.thinkingLevels.firstOrNull { it.id == currentThinkingLevel(model) }
         // 工作区每轮重新取（见循环开头）：用户可能在任务跑到一半时换目录、或者解绑。
         // 以前它是 agentTurn 开头的局部常量，于是"已经解绑了"之后工具还拿着旧 fs
@@ -1360,7 +1406,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val turnStart = android.os.SystemClock.elapsedRealtime()
         // 这一轮新产生的消息 id 都大于它。收尾打时间戳时用它划边界 ——
         // 否则"这一轮没有任何回复（比如立刻报错）"会把**上一轮**的时间改掉
-        val turnBaseId = messages.lastOrNull()?.id ?: 0L
+        val turnBaseId = msgs.lastOrNull()?.id ?: 0L
         // 无进展相关的计数，全部按"步"和"连续"统计，不看总步数
         var noProgressSteps = 0
         var sameToolFails = 0
@@ -1430,7 +1476,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // 于是又退回"buildHistory 静默丢早期轮次"。
                 if (compactAttempts < MAX_COMPACT_ATTEMPTS) {
                     val outcome = try {
-                        maybeCompact(provider, model, apiKey)
+                        maybeCompact(provider, model, apiKey, buf = msgs)
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (e: Throwable) {
@@ -1443,6 +1489,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     model,
                     hasWorkspace = fs != null,
                     historyScale = historyScale,
+                    buf = msgs,
                 )
                 var collected = ""
                 var lastFlush = 0L
@@ -1466,20 +1513,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                             collected += event.text
                             // 节流：每 60ms 才提交一次，令牌级刷新会让整段文本反复 measure
                             val now = android.os.SystemClock.uptimeMillis()
-                            val idx = messages.indexOfFirst { it.id == draftId }
+                            val idx = msgs.indexOfFirst { it.id == draftId }
                             if (idx >= 0 && !streamHeld && now - lastFlush >= 60L) {
                                 lastFlush = now
-                                messages[idx] = messages[idx].copy(text = collected)
+                                msgs[idx] = msgs[idx].copy(text = collected)
                             }
                         }
                         // 思考内容：单独累积，节流后写进草稿，UI 才能边想边显示
                         is ChatClient.Event.Reasoning -> {
                             think += event.text
                             val now = android.os.SystemClock.uptimeMillis()
-                            val idx = messages.indexOfFirst { it.id == draftId }
+                            val idx = msgs.indexOfFirst { it.id == draftId }
                             if (idx >= 0 && !streamHeld && now - lastThinkFlush >= 80L) {
                                 lastThinkFlush = now
-                                messages[idx] = messages[idx].copy(reasoning = think)
+                                msgs[idx] = msgs[idx].copy(reasoning = think)
                             }
                         }
                         is ChatClient.Event.Done -> {
@@ -1495,7 +1542,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                val idx = messages.indexOfFirst { it.id == draftId }
+                val idx = msgs.indexOfFirst { it.id == draftId }
                 val f = failure
                 if (f != null) {
                     val blob = (f.message + " " + f.detail).lowercase()
@@ -1523,7 +1570,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         historyScale = minOf(historyScale * 0.5, target).coerceAtLeast(floorScale)
                         notice = "这次请求超过了模型的上下文窗口，已自动缩短历史后重试"
                         if (idx >= 0) {
-                            messages[idx] = messages[idx].copy(
+                            msgs[idx] = msgs[idx].copy(
                                 text = "", detail = "", reasoning = "", failed = false,
                             )
                         }
@@ -1535,7 +1582,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     if (transient && collected.isBlank() && streamRetries < STREAM_RETRIES) {
                         streamRetries++
                         if (idx >= 0) {
-                            messages[idx] = messages[idx].copy(
+                            msgs[idx] = msgs[idx].copy(
                                 text = "", detail = "", reasoning = "", failed = false,
                             )
                         }
@@ -1544,7 +1591,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     // 名下被判定为视觉、网关却拒收图片：把"该怎么改"直接写进错误里，
                     // 否则用户只会看到一句 "400 Bad Request" 然后无从下手
-                    val hadImages = messages.any { it.id < draftId && it.images.isNotEmpty() }
+                    val hadImages = msgs.any { it.id < draftId && it.images.isNotEmpty() }
                     val imgRejected = hadImages && listOf("image", "vision", "multimodal", "图片", "视觉")
                         .any { blob.contains(it) }
                     val msgWithHint = if (imgRejected) {
@@ -1556,7 +1603,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                             "它实际可用的窗口比设置的更小。请在「模型 → 编辑 → 上下文窗口」里改小，" +
                             "或清空让自动识别生效。"
                     } else f.message
-                    if (idx >= 0) messages[idx] = messages[idx].copy(
+                    if (idx >= 0) msgs[idx] = msgs[idx].copy(
                         failed = true,
                         text = if (collected.isBlank()) msgWithHint else collected,
                         detail = f.detail,
@@ -1569,7 +1616,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 if (idx >= 0) {
-                    messages[idx] = messages[idx].copy(
+                    msgs[idx] = msgs[idx].copy(
                         text = collected,
                         usage = usage,
                         calls = calls,
@@ -1621,7 +1668,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         // 压缩不是文件操作，要访问消息历史与模型，所以在这里截，
                         // 不走 ToolRunner（它只懂工作区里的文件）
                         c.name == ToolPolicy.COMPACT_CONTEXT ->
-                            runCompactTool(provider, model, apiKey)
+                            runCompactTool(provider, model, apiKey, msgs)
                         // 只拦"真的要碰工作区"的工具；run_shell / memory_* 照常执行
                         fs == null && c.name !in ToolPolicy.workspaceFreeTools -> ToolResult(
                             ok = false,
@@ -1632,7 +1679,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         )
                         else -> runToolCall(c, fs)
                     }
-                    appendToolMessage(c, r)
+                    appendToolMessage(c, r, msgs)
                     // 每个工具结果落地就存一次（节流 1.2s）：续跑需要的是"工具真的做过什么"，
                     // 光有 assistant 的 tool_calls 不够，模型会重复执行同一步
                     saveNow()
@@ -1723,7 +1770,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
                 // 下一轮：新起一条 assistant 草稿，前面那轮的文字与工具卡片就定在那儿了
                 draftId = idGen.incrementAndGet()
-                messages += ChatMsg(
+                msgs += ChatMsg(
                     id = draftId,
                     role = "assistant",
                     text = "",
@@ -1734,7 +1781,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         } finally {
-            stopRunService()
+            // 这一轮属于的会话已经不在屏幕上了：主动落盘，否则进程一死结果就没了
+        if (sid != sessionId) persistBackground(sid, msgs)
+        stopRunService()
             streaming = false
             // 取消（Activity 被回收 / 用户点停止）时，普通 suspend 调用会立刻再抛
             // CancellationException，连"把脏标记清掉、把消息落盘"都做不到。
@@ -1745,7 +1794,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val spentMs = android.os.SystemClock.elapsedRealtime() - turnStart
                 // **先打时间戳再落盘**：反过来的话存进去的是没有时间的版本，
                 // 下次打开这段会话就少一行"结束时间/用时"
-                stampTurnEnd(spentMs, turnBaseId)
+                stampTurnEnd(spentMs, turnBaseId, msgs)
                 // 收尾完整写一次（绕过节流）：流式过程中是节流写的，最后几条可能在窗口里
                 saveNow(force = true)
             }
@@ -1764,14 +1813,40 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 时间与耗时是**这一轮**的属性；写在每条上会出现"工具卡各自显示一个不同时长"，
      * 而且落盘体积也会变大。
      */
-    private fun stampTurnEnd(spentMs: Long, turnBaseId: Long) {
+    /**
+     * 把"已经切走的那段会话"落盘。
+     *
+     * 后台任务跑完时界面可能已经指向别的会话了，这时不能用 snapshotSession()
+     * —— 它读的是当前显示的 messages，会把结果写到错的会话里。
+     * 这里按发起时捕获的 sid 与缓冲直接构造。
+     */
+    private fun persistBackground(sid: String, buf: SnapshotStateList<ChatMsg>) {
+        if (sid.isBlank() || buf.isEmpty()) return
+        val exist = store.state.value.sessions.firstOrNull { it.id == sid }
+        val head = buf.firstOrNull { it.role == "user" } ?: buf.first()
+        val title = head.text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()
+            ?.take(28)?.takeIf { it.isNotEmpty() } ?: "新会话"
+        val session = Session(
+            id = sid,
+            title = title,
+            createdAt = exist?.createdAt ?: System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis(),
+            // 工作区归属沿用这段会话自己绑定的那个，不用当前界面的
+            workspaceUri = exist?.workspaceUri.orEmpty(),
+            workspaceName = exist?.workspaceName.orEmpty(),
+            messages = buf.map { it.toStored() },
+        )
+        saveScope.launch { runCatching { store.saveSession(session, makeCurrent = false) } }
+    }
+
+    private fun stampTurnEnd(spentMs: Long, turnBaseId: Long, buf: SnapshotStateList<ChatMsg>) {
         // 用 >= 而不是 >：纯对话轮次里唯一属于这一轮的消息就是 send() 追加的那个空草稿，
         // 它的 id 正好等于 turnBaseId。用 > 会一条都找不到，于是"耗时 / 结束时间"永远不落盘。
-        val i = messages.indexOfLast {
+        val i = buf.indexOfLast {
             (it.role == "assistant" || it.role == "tool") && it.id >= turnBaseId
         }
         if (i < 0) return
-        messages[i] = messages[i].copy(
+        buf[i] = buf[i].copy(
             at = System.currentTimeMillis(),
             elapsedMs = spentMs.coerceAtLeast(0L),
         )
@@ -1845,11 +1920,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 于是它认为还很空、buildHistory 却已经在裁历史 —— 早期轮次被静默丢掉且不产生摘要，
      * 模型忘了自己刚改过什么，重复读、重复改。
      */
-    private fun historyGroups(): List<Pair<Long, List<ChatClient.Message>>> {
+    private fun historyGroups(buf: SnapshotStateList<ChatMsg>): List<Pair<Long, List<ChatClient.Message>>> {
         val groups = ArrayList<Pair<Long, List<ChatClient.Message>>>()
         var i = 0
-        while (i < messages.size) {
-            val m = messages[i]
+        while (i < buf.size) {
+            val m = buf[i]
             if (m.role == SUMMARY_ROLE) { i++; continue }
             when {
                 m.role == "user" -> {
@@ -1868,8 +1943,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     // 收集这一组后面紧跟的 tool 结果
                     val toolMsgs = ArrayList<ChatMsg>()
                     i++
-                    while (i < messages.size && messages[i].role == "tool" && messages[i].tool != null) {
-                        toolMsgs.add(messages[i])
+                    while (i < buf.size && buf[i].role == "tool" && buf[i].tool != null) {
+                        toolMsgs.add(buf[i])
                         i++
                     }
                     // 协议要求「每个 tool_call 都有对应的 tool 结果」。进程被杀/老数据里
@@ -1921,15 +1996,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
          * 而不是把整轮判死（用户看到的是"继续答题"而不是"请求失败"）。
          */
         historyScale: Double = 1.0,
+        buf: SnapshotStateList<ChatMsg>,
     ): List<ChatClient.Message> {
-        // 最新的摘要决定"哪些原始消息不再进上下文"。它们仍然留在 messages 里，
+        // 最新的摘要决定"哪些原始消息不再进上下文"。它们仍然留在 buf 里，
         // 用户往上翻能看到全文，只是不再花 token。
-        val summary = messages.lastOrNull { it.role == SUMMARY_ROLE }
+        val summary = buf.lastOrNull { it.role == SUMMARY_ROLE }
         val cut = summary?.coveredUpTo ?: 0L
 
         // 整组过滤：绝不能把 assistant(tool_calls) 和紧跟它的 tool 结果拆开 —— 拆开就是 400。
         // 按"组首消息 id"判断，而不是按单条消息判断，正是为了这一点。
-        val kept = historyGroups().filter { it.first > cut }
+        val kept = historyGroups(buf).filter { it.first > cut }
 
         // 预算按 **token** 算，不再用"字符 × 3"：那个系数把中文当成 1 token/3 字符，
         // 而实测中文是 0.6–0.9 token/字。500k 窗口按 ×3 会算成 1.5M 字符，请求必超。
@@ -2032,6 +2108,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         apiKey: String,
         /** 模型主动请求压缩时跳过阈值 —— 它自己判断"记不住了"，比一个固定比例更准 */
         force: Boolean = false,
+        buf: SnapshotStateList<ChatMsg>,
     ): CompactOutcome {
         val budget = historyTokenBudget(model)
 
@@ -2039,9 +2116,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // 以前只数 text/apiText，漏掉工具参数的 JSON 和图片（每张约 1k），
         // 于是 tokensOf 认为早该压了、这里却认为还很空，buildHistory 静默裁掉早期轮次。
         fun usedTokens(): Int {
-            val old = messages.lastOrNull { it.role == SUMMARY_ROLE }
+            val old = buf.lastOrNull { it.role == SUMMARY_ROLE }
             val lower = old?.coveredUpTo ?: 0L
-            return historyGroups()
+            return historyGroups(buf)
                 .filter { it.first > lower }
                 .sumOf { (_, g) -> g.sumOf { tokensOf(it) } } +
                 com.pocketagent.app.net.TokenEstimator.estimate(old?.text.orEmpty())
@@ -2057,11 +2134,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // 历史越长越必然 400 —— 而那正是最需要压缩的时候，于是永远压不动。
         while (round < COMPACT_BATCH_ROUNDS) {
             round++
-            val old = messages.lastOrNull { it.role == SUMMARY_ROLE }
+            val old = buf.lastOrNull { it.role == SUMMARY_ROLE }
             val lower = old?.coveredUpTo ?: 0L
             // 最近这 8 条无论多长都留原文
-            val keepFrom = messages.takeLast(COMPACT_KEEP_RECENT).firstOrNull()?.id ?: break
-            val victims = messages.filter { it.role != SUMMARY_ROLE && it.id < keepFrom && it.id > lower }
+            val keepFrom = buf.takeLast(COMPACT_KEEP_RECENT).firstOrNull()?.id ?: break
+            val victims = buf.filter { it.role != SUMMARY_ROLE && it.id < keepFrom && it.id > lower }
             if (victims.size < COMPACT_MIN_VICTIMS) break
 
             val cap = (budget * COMPACT_BATCH_SHARE).toInt()
@@ -2114,9 +2191,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
             val covered = batch.last().id
             // 旧摘要的内容已经折进新摘要，删掉它，避免两段摘要重复占上下文
-            messages.removeAll { it.role == SUMMARY_ROLE }
+            buf.removeAll { it.role == SUMMARY_ROLE }
             // 放在列表最前面：它代表的是"最早的对话"，位置必须对得上语义
-            messages.add(
+            buf.add(
                 0,
                 ChatMsg(
                     id = idGen.incrementAndGet(),
@@ -2270,8 +2347,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return if (skillBlock.isBlank()) base else base + "\n\n" + skillBlock
     }
 
-    private fun appendToolMessage(call: ToolCall, r: ToolResult) {
-        messages += ChatMsg(
+    private fun appendToolMessage(call: ToolCall, r: ToolResult, buf: SnapshotStateList<ChatMsg>) {
+        buf += ChatMsg(
             id = idGen.incrementAndGet(),
             role = "tool",
             // text 留空：工具卡片自己渲染，正文只回灌给模型（apiText）。
@@ -2322,9 +2399,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         provider: ProviderInstance,
         model: ModelProfile,
         apiKey: String,
+        buf: SnapshotStateList<ChatMsg>,
     ): ToolResult {
         val ok = try {
-            maybeCompact(provider, model, apiKey, force = true) == CompactOutcome.DONE
+            maybeCompact(provider, model, apiKey, force = true, buf = buf) == CompactOutcome.DONE
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -2621,12 +2699,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 和「清空当前会话」的区别是它保留历史，并在下一条消息时开一段新的。
      */
     fun newConversation() {
-        stopStreaming()
+        // 上一段还在跑就让它跑完：它的 agentTurn 持有自己那块缓冲，不依赖界面
+        val leavingKey = bufferKey()
+        val leavingRunning = streaming
         resetSessionToolState()
         val snap = snapshotSession()
-        messages.clear()
-        refs.clear()
+
+        // 新会话换一块干净缓冲。旧的那块如果还有任务在写就留着，否则回收
         sessionId = ""
+        val buf = bufferOf(DRAFT_KEY)
+        buf.clear()
+        messages = buf
+        refs.clear()
         // 新对话 = 干净的空状态：不继承上一段的工作区，由用户自己决定要不要选
         clearWorkspaceBinding()
         // 技能也不继承：它是"这段对话的工作方式"，悄悄带到下一段会让人莫名其妙
@@ -2636,6 +2720,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             snap?.let { store.saveSession(it) }
             store.setCurrentSession("")
         }
+        if (!leavingRunning && leavingKey != bufferKey()) sessionBuffers.remove(leavingKey)
         refreshCtxUsage()
     }
 
@@ -2761,13 +2846,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun openSession(id: String) {
         if (id == sessionId) return
         val target = store.state.value.sessions.firstOrNull { it.id == id } ?: return
-        stopStreaming()
+
+        // 关键：正在跑的这一轮**不取消**。
+        // 它的 agentTurn 拿到的是启动时那段会话的缓冲引用，切走只改界面指向，
+        // 任务继续在后台往原缓冲里写，写完由它自己落盘。
+        val leavingKey = bufferKey()
+        val leavingRunning = streaming
+
+        // 切到另一段会话：界面上的"停止"不再是这段会话的，按目标会话的状态重置
         resetSessionToolState()
         val snap = snapshotSession()
-        // 先建好新列表再一次性换入：清空与填充之间不留"空会话"那一帧
-        val incoming = target.messages.map { it.toChat() }
-        messages.clear()
-        messages.addAll(incoming)
+
+        // 目标会话自己的缓冲。已经载入过就复用（后台可能刚往里面写过东西），
+        // 第一次进来才从存档填充。
+        val buf = bufferOf(id)
+        if (buf.isEmpty() && target.messages.isNotEmpty()) {
+            buf.addAll(target.messages.map { it.toChat() })
+        }
+        messages = buf
+
         idGen.set(target.messages.maxOfOrNull { it.id } ?: 0L)
         refs.clear()
         sessionId = id
@@ -2781,6 +2878,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             snap?.let { store.saveSession(it, makeCurrent = false) }
             store.setCurrentSession(id)
         }
+        // 没在跑的那段：缓冲已经落盘，留在表里只会一直占内存。
+        // 但**不能删当前这块** —— 从草稿态切到草稿态时两者的 key 相同，
+        // 删掉会让 messages 指向一个已经不在表里的 list，下次取到的又是新的空表。
+        if (!leavingRunning && leavingKey != bufferKey()) sessionBuffers.remove(leavingKey)
         refreshCtxUsage()
     }
 
@@ -2890,7 +2991,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         val draftId = appendDraft(provider, model)
         streaming = true
-        streamJob = viewModelScope.launch { agentTurn(provider, model, apiKey, draftId) }
+        streamJob = viewModelScope.launch { agentTurn(provider, model, apiKey, draftId, messages, sessionId) }
     }
 
     /** 不继续：把标记清掉，并把残留的空草稿标成"已中断"，别让它一直转圈 */
