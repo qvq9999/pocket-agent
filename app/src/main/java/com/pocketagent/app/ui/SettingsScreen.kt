@@ -429,11 +429,14 @@ fun SettingsScreen(
                             )
                             Hairline()
                             SettingRow(
-                                "版本",
-                                com.pocketagent.app.BuildConfig.VERSION_NAME,
-                                onClick = {},
-                                clickable = false,
-                                icon = G.INFO,
+                                title = "版本",
+                                value = com.pocketagent.app.BuildConfig.VERSION_NAME,
+                                desc = vm.updateStatusText(),
+                                icon = G.REFRESH,
+                                // 有新版时整行提亮成 accent：这是唯一一个"点一下会改变结果"的行，
+                                // 平时保持和其它行一样的灰，避免抢注意力
+                                iconTint = if (vm.updateAvailable != null) pal().accent else null,
+                                onClick = { vm.checkUpdate(manual = true) },
                             )
                         }
                     }

@@ -122,14 +122,32 @@ fun ConfirmDialog(
     }
 }
 
+/**
+ * 弹窗底部按钮。
+ *
+ * [primaryColor] 默认是 `bad`（删除类操作），更新弹窗传 `accent` ——
+ * 两者共用同一套尺寸与圆角，只换主色，避免出现"两种风格的弹窗"。
+ */
 @Composable
-private fun DialogButton(text: String, primary: Boolean, onClick: () -> Unit) {
+internal fun DialogButton(
+    text: String,
+    primary: Boolean,
+    onClick: () -> Unit,
+    primaryColor: androidx.compose.ui.graphics.Color = pal().bad,
+    enabled: Boolean = true,
+) {
     Box(
         Modifier
             .height(34.dp)
             .clip(RoundedCornerShape(50))
-            .background(if (primary) pal().bad else pal().surfaceAlt)
-            .clickable(onClick = onClick)
+            .background(
+                when {
+                    !enabled -> pal().surfaceAlt
+                    primary -> primaryColor
+                    else -> pal().surfaceAlt
+                }
+            )
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -137,8 +155,12 @@ private fun DialogButton(text: String, primary: Boolean, onClick: () -> Unit) {
             text,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
-            // 主按钮文字用 pageBg：亮色下是白字压深红，暗色下是黑字压浅红，两边都够对比
-            color = if (primary) pal().pageBg else pal().ink,
+            // 主按钮文字用 pageBg：亮色下是白字压深色，暗色下是黑字压浅色，两边都够对比
+            color = when {
+                !enabled -> pal().faint
+                primary -> pal().pageBg
+                else -> pal().ink
+            },
         )
     }
 }

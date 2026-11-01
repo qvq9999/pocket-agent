@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -52,11 +53,27 @@ class MainActivity : ComponentActivity() {
             }
 
             AgentTheme(mode = mode) {
+                // 冷启动的第一次检查在这里触发：onResume 时 hostVm 可能还没赋值
+                // （setContent 是同步的，但首次组合是异步的），所以不能只靠 onResume。
+                // 重复调用无害：checkUpdateOnResume 内部有 updateUi / updateChecking 两道守卫。
+                LaunchedEffect(Unit) { vm.checkUpdateOnResume() }
                 Surface(Modifier.fillMaxSize(), color = pal().pageBg) {
                     AppRoot(vm)
                 }
             }
         }
+    }
+
+    /**
+     * 每次回到前台：
+     * 1) 如果刚从「安装未知应用」授权页回来，直接接着装，不让用户再点一次；
+     * 2) 距离上次检查超过 24 小时就补一次（断网/后台被杀期间错过的检查在这里补上）。
+     */
+    override fun onResume() {
+        super.onResume()
+        val vm = hostVm ?: return
+        runCatching { vm.resumeUpdateAfterPermission() }
+        runCatching { vm.checkUpdateOnResume() }
     }
 
     /**

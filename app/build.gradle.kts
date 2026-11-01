@@ -18,8 +18,8 @@ android {
         applicationId = "com.pocketagent.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 43
-        versionName = "0.8.1"
+        versionCode = 44
+        versionName = "0.8.2"
     }
 
     buildTypes {

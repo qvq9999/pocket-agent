@@ -309,8 +309,19 @@ fun ModelProfile.capabilitySource(): String =
 /** 手填与声明的上限：再大没有任何厂商支持，纯属手滑 */
 const val MAX_CONTEXT_WINDOW = 1_000_000
 
-/** 查不到任何信息时的保守默认值。故意小：设小了只是少放点历史，设大了请求直接 400 */
-const val DEFAULT_CONTEXT_WINDOW = 32_000
+/**
+ * 查不到任何信息时的默认值。
+ *
+ * 取 200k 是产品决定：现在的模型（Claude / GPT-4o 之后 / o 系列 / GLM / Kimi 等）
+ * 主流窗口都在 128k～256k，31k 的老默认值会让长任务在中途被迫压缩，
+ * 用户感受到的是"聊到一半它把前面的忘了"。
+ *
+ * 代价要说清楚：窗口报大了，网关会直接 400。所以这条默认值能成立，
+ * 靠的是 `AppViewModel.agentTurn` 里"400 → 缩短历史重试"的自愈 —— 真的撞上
+ * 小窗口模型时会退回到能装下的长度，而不是把这一轮打死。
+ * 已知窗口的模型优先走 [declaredContextWindow]，不会用到这个值。
+ */
+const val DEFAULT_CONTEXT_WINDOW = 200_000
 
 /**
  * 按模型名声明上下文窗口（token）。取值只写各家公开文档明确写过的；
@@ -343,7 +354,7 @@ fun declaredContextWindow(modelId: String): Int? {
     }
 }
 
-/** 实际生效的窗口：手动设置 > 模型表声明 > 默认 32k。所有预算都读这一个函数 */
+/** 实际生效的窗口：手动设置 > 模型表声明 > 默认 200k。所有预算都读这一个函数 */
 fun ModelProfile.effectiveContextWindow(): Int =
     (contextWindow?.takeIf { it in 4_000..MAX_CONTEXT_WINDOW }
         ?: declaredContextWindow(modelId)

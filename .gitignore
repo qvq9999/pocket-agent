@@ -19,6 +19,9 @@ keystore.properties
 *.ap_
 *.apk.idsig
 
+# ── 发版产物（release_manifest.py 生成，含 APK 与 version.json）──
+dist/
+
 # ── IDE / 系统 ──
 .idea/
 *.iml

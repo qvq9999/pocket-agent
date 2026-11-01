@@ -9,4 +9,11 @@
 -->
 <paths>
     <cache-path name="camera" path="camera/" />
+    <!--
+        应用内更新下载的安装包（cacheDir/update/*.apk）。
+        没有这一条，FileProvider.getUriForFile 找不到根目录，抛的是
+        IllegalArgumentException("Failed to find configured root")，
+        表现是"点了立即更新，下载完什么也没发生"。
+    -->
+    <cache-path name="update" path="update/" />
 </paths>

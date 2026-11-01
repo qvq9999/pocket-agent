@@ -355,7 +355,7 @@ fun EditModelScreen(
 
             // ── 上下文窗口 ──
             // 只在"当前启用"的那个模型上改：单选语义下，实际发给 API 的也只有它。
-            // 留空 = 自动（按模型名识别，识别不出按 32k），不会因为不知道填多少而没法用。
+            // 留空 = 自动（按模型名识别，识别不出按 200k），不会因为不知道填多少而没法用。
             val activeIdx = models.indexOfFirst { it.enabled }
             if (activeIdx >= 0) {
                 val activeModel = models[activeIdx]

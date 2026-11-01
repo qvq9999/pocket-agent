@@ -58,6 +58,7 @@ import com.pocketagent.app.ui.SettingsScreen
 import com.pocketagent.app.ui.SkillDetailScreen
 import com.pocketagent.app.ui.SkillScreen
 import com.pocketagent.app.ui.ToolApprovalDialog
+import com.pocketagent.app.ui.UpdateDialog
 import com.pocketagent.app.ui.HelpScreen
 import com.pocketagent.app.ui.UsageScreen
 import com.pocketagent.app.ui.pal
@@ -584,6 +585,17 @@ fun AppRoot(vm: AppViewModel) {
                 onDeny = { vm.answerApproval(ApprovalAnswer.DENY) },
                 onAllowOnce = { vm.answerApproval(ApprovalAnswer.ONCE) },
                 onAllowAlways = { vm.answerApproval(ApprovalAnswer.ALWAYS) },
+            )
+        }
+        // ── ⑥ 版本更新：同样盖在所有层之上 ──
+        // 只在一轮 agent 结束后才可能被置起（见 AppViewModel.offerUpdate 里的 runActive 判断），
+        // 所以不会和上面的审批框抢焦点。
+        vm.updateUi?.let { ui ->
+            UpdateDialog(
+                ui = ui,
+                onUpdate = { vm.startUpdate() },
+                onLater = { vm.dismissUpdate() },
+                onGoSettings = { vm.openInstallPermission() },
             )
         }
     }

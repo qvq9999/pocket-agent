@@ -12,6 +12,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 后台跑长任务时灭屏会让 CPU 进 Doze，收流/工具执行会停在半路 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!--
+        应用内更新：下载完成后交给系统安装器覆盖安装。
+        Android 8.0 起没有它就只能弹「已下载，请手动安装」，无法直接拉起安装流程。
+        注意这是 Google Play 的敏感权限（只批文件管理器/应用商店类），
+        本应用走自建 Release 分发，不经过商店，因此不受限。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!--
         Android 11+ 的包可见性：不声明 <queries> 时，queryIntentActivities 只看得见本应用自己。

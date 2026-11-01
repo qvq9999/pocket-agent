@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.documentfile.provider.DocumentFile
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.pocketagent.app.agent.DiffLine
@@ -39,12 +40,17 @@ import com.pocketagent.app.data.SessionGroup
 import com.pocketagent.app.data.SearchSettings
 import com.pocketagent.app.data.Store
 import com.pocketagent.app.data.StoredMsg
+import com.pocketagent.app.data.UpdateManifest
+import com.pocketagent.app.data.UpdatePrefs
 import com.pocketagent.app.data.UsageEntry
 import com.pocketagent.app.data.effectiveContextWindow
+import com.pocketagent.app.net.ApkDownloader
 import com.pocketagent.app.net.ChatClient
 import com.pocketagent.app.net.Discovery
 import com.pocketagent.app.net.ThinkingRules
+import com.pocketagent.app.net.UpdateChecker
 import com.pocketagent.app.service.AgentRunService
+import com.pocketagent.app.ui.UpdateUi
 import com.pocketagent.app.ui.VendorIcons
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +60,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TRANSLATE_PROMPT = """你是翻译引擎。把用户发来的内容译成简体中文。
@@ -342,6 +349,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 增量落盘的节流间隔：每次工具都整份重写 state.json 太贵 */
         const val SAVE_THROTTLE_MS = 1_200L
+
+        /**
+         * 自动检查更新的节流间隔，24 小时。
+         *
+         * 再密就是骚扰（每次冷启动都发一次请求），再稀用户会觉得"为什么别人都收到推送我还没有"。
+         * 手动检查不受这个值限制。
+         */
+        const val CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
     }
 
     private val store = Store(app)
@@ -2921,6 +2936,227 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 正在清理。和安装/删除互斥 —— 一边 apt 在写缓存一边删，包会坏 */
     var cleaningLinux by mutableStateOf(false)
         private set
+
+    // ─────────── 版本更新 ───────────
+
+    /** 更新弹窗状态；null = 不显示。形态见 [UpdateUi]，四种共用同一个弹窗实例 */
+    var updateUi by mutableStateOf<UpdateUi?>(null)
+        private set
+
+    /** 正在检查。设置页版本行据此显示「检查中…」 */
+    var updateChecking by mutableStateOf(false)
+        private set
+
+    /** 已确认存在的新版本。设置页据此显示「新版本 x.y.z」，也是自动弹窗的待办项 */
+    var updateAvailable by mutableStateOf<UpdateManifest?>(null)
+        private set
+
+    /** 最近一次手动检查的失败原因；成功即清空 */
+    var updateError by mutableStateOf("")
+        private set
+
+    private val apkDownloader by lazy { ApkDownloader(getApplication()) }
+    private var updateJob: Job? = null
+
+    /**
+     * 回到前台时的检查入口（冷启动也会走这里 —— onCreate 之后必然 onResume）。
+     *
+     * 三条优先级：先把「已经确认过的更新」弹出来 → 再补一次到期检查 → 都不满足就什么都不做。
+     * 已经确认过的为什么优先：上次可能因为正在跑 agent 或用户在引导页而没能弹，
+     * 那种情况下不该再等 24 小时。
+     */
+    fun checkUpdateOnResume() {
+        if (updateUi != null || updateChecking) return
+
+        updateAvailable?.let {
+            offerUpdate(it, manual = false)
+            return
+        }
+
+        val ctx = getApplication<Application>()
+        val elapsed = System.currentTimeMillis() - UpdatePrefs.lastCheckAt(ctx)
+        if (elapsed < CHECK_INTERVAL_MS) return
+        checkUpdate(manual = false)
+    }
+
+    /**
+     * 检查更新。
+     *
+     * @param manual 用户点了设置页的「检查更新」。手动检查会给明确反馈（包括"已是最新"和失败原因）；
+     *               自动检查只在真的有新版时才有存在感，其余静默。
+     */
+    fun checkUpdate(manual: Boolean) {
+        if (updateChecking) return
+        val ctx = getApplication<Application>()
+        updateChecking = true
+        if (manual) updateError = ""
+        viewModelScope.launch {
+            val result = runCatching { UpdateChecker.check(ctx, manual) }
+                .getOrElse { UpdateChecker.Result.Failed(it.message ?: "未知错误") }
+            updateChecking = false
+            when (result) {
+                is UpdateChecker.Result.Available -> {
+                    updateAvailable = result.manifest
+                    offerUpdate(result.manifest, manual)
+                }
+
+                UpdateChecker.Result.UpToDate -> {
+                    updateAvailable = null
+                    UpdatePrefs.markChecked(ctx, ok = true)
+                    if (manual) updateUi = UpdateUi.UpToDate
+                }
+
+                is UpdateChecker.Result.Failed -> {
+                    // 自动检查的失败不打扰用户：断网、代理、镜像抽风都算常态
+                    if (manual) updateError = result.reason
+                    UpdatePrefs.markChecked(ctx, ok = false, error = result.reason)
+                }
+            }
+        }
+    }
+
+    /**
+     * 决定要不要弹。
+     *
+     * 频率规则只有一条核心：**同一个 versionCode 在用户点过取消之后不再自动弹**。
+     * 少了它，24 小时一轮就变成每天提醒一次同一个版本 —— 这是更新功能最常见的翻车点。
+     * 手动检查不受这条限制（用户主动问的，必须回答）。
+     */
+    private fun offerUpdate(m: UpdateManifest, manual: Boolean) {
+        val ctx = getApplication<Application>()
+        val forced = m.isForcedFor(BuildConfig.VERSION_CODE)
+        if (manual) UpdatePrefs.clearSkip(ctx)
+        if (!manual && !forced && UpdatePrefs.skippedCode(ctx) == m.versionCode) return
+        // 正在跑一轮 agent 时不盖弹窗：它会挡住工具审批框，用户点不到确认就等于卡死
+        if (!manual && state.value.runActive) return
+        UpdatePrefs.markOffered(ctx, m.versionCode)
+        updateUi = UpdateUi.Offer(m, forced)
+    }
+
+    /** 关闭弹窗。Offer 记一次「跳过」，Downloading 掐掉协程但保留 .part 以便续传 */
+    fun dismissUpdate() {
+        val ui = updateUi ?: return
+        val ctx = getApplication<Application>()
+        when (ui) {
+            is UpdateUi.Offer -> if (!ui.forced) UpdatePrefs.skip(ctx, ui.manifest.versionCode)
+            is UpdateUi.Downloading -> updateJob?.cancel()
+            else -> Unit
+        }
+        updateUi = null
+    }
+
+    /** 点「立即更新」/「重试」/从权限设置返回后继续 */
+    fun startUpdate() {
+        val m = when (val ui = updateUi) {
+            is UpdateUi.Offer -> ui.manifest
+            is UpdateUi.Failed -> ui.manifest
+            is UpdateUi.NeedPermission -> ui.manifest
+            else -> null
+        } ?: return
+
+        val app = getApplication<Application>()
+
+        // 上一轮已经下完并通过校验：直接进安装，别让用户再等一遍
+        val ready = apkDownloader.apkFile(m.versionCode)
+        if (ready.isFile && ready.length() > 0 && (m.sizeBytes <= 0 || ready.length() == m.sizeBytes)) {
+            installApk(ready, m)
+            return
+        }
+
+        if (!canInstallPackages(app)) {
+            updateUi = UpdateUi.NeedPermission(m)
+            return
+        }
+
+        updateJob?.cancel()
+        updateUi = UpdateUi.Downloading(m, ApkDownloader.Progress(0, m.sizeBytes, 0))
+        UpdatePrefs.setPending(app, m.versionCode)
+        updateJob = viewModelScope.launch {
+            val outcome = try {
+                apkDownloader.download(m) { p -> updateUi = UpdateUi.Downloading(m, p) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 用户点了取消：.part 留在缓存里，下次接着下
+                if (updateUi is UpdateUi.Downloading) updateUi = null
+                return@launch
+            }
+            when (outcome) {
+                is ApkDownloader.Outcome.Ok -> installApk(outcome.file, m)
+                ApkDownloader.Outcome.Cancelled -> if (updateUi is UpdateUi.Downloading) updateUi = null
+                is ApkDownloader.Outcome.Failed -> updateUi = UpdateUi.Failed(m, outcome.reason)
+            }
+        }
+    }
+
+    /** 跳系统「安装未知应用」授权页 */
+    fun openInstallPermission() {
+        val app = getApplication<Application>()
+        runCatching {
+            app.startActivity(
+                Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + app.packageName),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+    }
+
+    /**
+     * 从授权页返回后自动接上。
+     *
+     * 不做这一步的话，用户开完权限回来会看到一个还停在「还需要一步」的弹窗，
+     * 得再点一次才继续 —— 明明是他刚做完的事，却要重新操作一遍。
+     */
+    fun resumeUpdateAfterPermission() {
+        if (updateUi !is UpdateUi.NeedPermission) return
+        if (!canInstallPackages(getApplication())) return
+        startUpdate()
+    }
+
+    private fun canInstallPackages(app: Application): Boolean =
+        android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O ||
+            runCatching { app.packageManager.canRequestPackageInstalls() }.getOrDefault(true)
+
+    /**
+     * 交给系统安装器。
+     *
+     * 必须走 FileProvider 的 content:// —— Android 7 起对 `file://` 直接抛
+     * FileUriExposedException。`file_paths.xml` 里要有 `update/` 这一条，
+     * 否则 `getUriForFile` 找不到根目录，抛的是 IllegalArgumentException。
+     */
+    private fun installApk(file: File, m: UpdateManifest) {
+        val app = getApplication<Application>()
+        if (!canInstallPackages(app)) {
+            updateUi = UpdateUi.NeedPermission(m)
+            return
+        }
+        val started = runCatching {
+            val uri = FileProvider.getUriForFile(app, app.packageName + ".fileprovider", file)
+            app.startActivity(
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        }.isSuccess
+
+        if (started) {
+            // 安装器已经接管：弹窗必须退场，否则用户装完回来还挂着一个"正在下载"
+            updateUi = null
+            UpdatePrefs.clearPending(app)
+        } else {
+            updateUi = UpdateUi.Failed(m, "无法拉起系统安装器，请检查是否禁用了「安装未知应用」")
+        }
+    }
+
+    /** 设置页「版本」行的副标题：一行讲清当前有没有更新、以及点它会做什么 */
+    fun updateStatusText(): String = when {
+        updateChecking -> "正在检查…"
+        updateAvailable != null -> "发现新版本 ${updateAvailable?.versionName}，点按查看"
+        updateError.isNotBlank() -> "检查失败：$updateError，点按重试"
+        UpdatePrefs.lastCheckOk(getApplication()) -> "已是最新，点按重新检查"
+        else -> "点按检查更新"
+    }
 
     private val linuxCleaner by lazy { LinuxCleaner(getApplication()) }
 
