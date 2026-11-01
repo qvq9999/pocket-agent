@@ -12,7 +12,10 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        Thread { runUpgradeCleanup(this) }.apply { name = "upgrade-cleanup"; isDaemon = true }.start()
+        Thread {
+            runUpgradeCleanup(this)
+            cleanInstalledApk(this)
+        }.apply { name = "upgrade-cleanup"; isDaemon = true }.start()
     }
 
     companion object {
@@ -84,6 +87,36 @@ class App : Application() {
                 prefs.edit().putInt(KEY, CLEANUP_VERSION).apply()
                 Log.i(TAG, "cleanup to v$CLEANUP_VERSION done")
             }.onFailure { Log.w(TAG, "cleanup failed", it) }
+        }
+
+        /**
+         * 清掉已经装上去的安装包。
+         *
+         * 更新流程是「下到 cacheDir/update → 交给系统安装器」，装成功之后本进程会被
+         * **新版本的进程替换掉**，所以这里（新进程启动时）是唯一能确认"已经装完了"的时机：
+         * 此时 `BuildConfig.VERSION_CODE` 就等于刚装的那个包的版本号。
+         *
+         * System 不会替我们删这个文件，留着有两个坏处：每个版本白占约 2MB，
+         * 而且下次点更新时 `ApkDownloader` 会把它当成"已经下好了"直接拿去装。
+         *
+         * 判据用 `code <= 当前版本` 而不是"删全部"：
+         * 下载完但安装被取消时，当前版本比它小 —— 那种包要留着，用户再点一次就能装。
+         */
+        private fun cleanInstalledApk(ctx: Context) {
+            val dir = File(ctx.cacheDir, "update")
+            if (!dir.isDirectory) return
+            val pattern = Regex("""^pocketagent-(\d+)\.apk(\.part)?$""")
+            runCatching {
+                dir.listFiles()?.forEach { f ->
+                    val code = pattern.find(f.name)?.groupValues?.get(1)?.toIntOrNull()
+                        ?: return@forEach
+                    if (code <= BuildConfig.VERSION_CODE && f.delete()) {
+                        Log.i(TAG, "drop installed apk: " + f.name)
+                    }
+                }
+                // 目录空了就一起删，别在 cache 里留一个空壳
+                if (dir.listFiles()?.isEmpty() == true) dir.delete()
+            }.onFailure { Log.w(TAG, "clean apk failed", it) }
         }
     }
 }

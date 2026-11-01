@@ -127,6 +127,14 @@ fun AppRoot(vm: AppViewModel) {
     fun popUp() { if (stack.isNotEmpty()) stack = stack.dropLast(1) }
     /** 保存完/取消编辑后回模型列表：中间可能隔着 Presets、Configure 两页 */
     fun popToModels() { stack = stack.dropLastWhile { it !is Screen.Models } }
+
+    /**
+     * 回到引导页。栈底有 Onboard 时，"配完模型"这条支路要落回这里。
+     *
+     * 与 [popToModels] 的区别只在退到哪一层：从设置进模型页时栈里没有 Onboard，
+     * 保存后就该停在列表；从引导进来时目标是走完引导，不该停在中间层。
+     */
+    fun popToOnboard() { stack = stack.dropLastWhile { it !is Screen.Onboard } }
     fun closeAllScreens() { stack = emptyList() }
 
     /**
@@ -551,7 +559,12 @@ fun AppRoot(vm: AppViewModel) {
                         def = target.def,
                         vm = vm,
                         onBack = { vm.resetDiscovery(); popUp() },
-                        onSaved = { popToModels() },
+                        onSaved = {
+                            // 从引导页进来的：配完直接回引导页，别停在模型列表。
+                            // 停在列表的话用户得自己意识到"还要按一次返回"，
+                            // 多数人这时候就切去聊天了，第 2 步（选工作区）永远走不到。
+                            if (stack.any { it is Screen.Onboard }) popToOnboard() else popToModels()
+                        },
                     )
                 }
             }

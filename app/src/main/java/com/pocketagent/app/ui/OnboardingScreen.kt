@@ -1,5 +1,11 @@
 package com.pocketagent.app.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,7 +32,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -79,7 +87,7 @@ fun OnboardingScreen(
         OnboardStage.Welcome ->
             "它不内置模型。填入你自己的 API Key，请求直接从这台手机发到厂商，中途不经过我们。"
         OnboardStage.PickWorkspace ->
-            "AI 只能在这个目录里读写文件，别处碰不到。随时可以换。"
+            "模型已经接好了。最后一步：划一个目录给它 —— AI 只能在这里读写，别处碰不到，随时可以换。"
         else ->
             "它能读写工作区里的文件，也能直接生成 Word 和 PPT —— 不需要额外下载任何东西。"
     }
@@ -153,6 +161,20 @@ fun OnboardingScreen(
             )
             Spacer(Modifier.height(8.dp))
             Text(desc, fontSize = 13.sp, lineHeight = 21.sp, color = pal().muted)
+
+            // 推荐区块只在"接模型"这一步出现。
+            // 重看时也显示：从设置点「使用引导」的人是在主动复习，
+            // 想看一遍"当初该怎么弄到 Key"是完全合理的需求，不该因为已经配好就被藏起来。
+            if (step == OnboardStage.Welcome) {
+                Spacer(Modifier.height(16.dp))
+                RecommendBlock(alreadyHasModel = hasModel)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    // 不写"点下面的按钮"：重看时下面是「下一步」，不是「添加模型」
+                    "拿到 Key 后，在 设置 → 模型与能力 → 模型 里选同一家厂商，端点已经填好了。",
+                    style = ty().micro,
+                )
+            }
 
             // ── 三步状态示意：完成打勾，比"只给一个按钮"多一层全局感 ──
             Spacer(Modifier.height(18.dp))
@@ -293,5 +315,199 @@ private fun SampleRow(text: String, onClick: () -> Unit) {
     ) {
         Text(text, fontSize = 12.5.sp, color = pal().ink, modifier = Modifier.weight(1f))
         Glyph(G.CHEV_RIGHT, 12.dp, pal().faint, 2.2f)
+    }
+}
+
+// ───────────── 推荐厂商 ─────────────
+
+/**
+ * 入门推荐的三家。
+ *
+ * 为什么不复用 providers.json 里的 docsUrl：那个字段指向"厂商文档首页"，
+ * 而用户在这里真正需要的是"能马上注册 / 创建 Key 的那一页"。
+ * MiMo 这条尤其要紧 —— 链接带 ref 参数，点进去邀请码已自动绑定，
+ * 比"先复制 6 位码、再找输入框粘贴"少三步，转化差别很实在。
+ *
+ * 文案只讲"为什么选它"，不讲参数：端点、模型名都在 providers.json 里，
+ * 用户拿到 Key 后走「添加模型」选同一家厂商就自动填好了。
+ */
+private data class Recommend(
+    val name: String,
+    val badge: String,
+    val blurb: String,
+    val keyUrl: String,
+    /** true = 白送/免费（绿标），false = 常规卖点（蓝标） */
+    val free: Boolean = false,
+    /** 有邀请码时额外显示一行，可单独复制 */
+    val inviteCode: String = "",
+    /** 链接的主机名。整串 URL 太长且没人读，用户认的是域名 */
+    val host: String = "",
+)
+
+private val RECOMMENDED = listOf(
+    Recommend(
+        name = "小米 MiMo",
+        badge = "送 ¥10",
+        blurb = "注册后邀请码自动填入，双方各得 10 元体验金，40 天有效。",
+        keyUrl = "https://platform.xiaomimimo.com?ref=BL6U65",
+        free = true,
+        inviteCode = "BL6U65",
+        host = "platform.xiaomimimo.com",
+    ),
+    Recommend(
+        name = "Agnes",
+        badge = "无限期免费",
+        blurb = "文本、图像、视频全模态免费，不绑卡，限速约 20 次/分钟。",
+        keyUrl = "https://platform.agnes-ai.com/",
+        free = true,
+        host = "platform.agnes-ai.com",
+    ),
+    Recommend(
+        name = "DeepSeek",
+        badge = "便宜好用",
+        blurb = "国内直连不必翻墙，价格低，日常问答和长文本都够用。",
+        keyUrl = "https://platform.deepseek.com/api_keys",
+        host = "platform.deepseek.com",
+    ),
+)
+
+/**
+ * 推荐区块。
+ *
+ * 两个操作刻意分开：点整行 = 打开注册页（主路径），「复制地址」= 复制 URL，
+ * 「复制」= 只复制邀请码。三种需求都要照顾到 —— 有人在手机上直接点开，
+ * 也有人习惯把链接发到微信再在电脑上注册。
+ */
+@Composable
+private fun RecommendBlock(alreadyHasModel: Boolean) {
+    val ctx = LocalContext.current
+
+    fun copyToClipboard(text: String, what: String) {
+        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val ok = cm != null && runCatching {
+            cm.setPrimaryClip(ClipData.newPlainText("PocketAgent", text))
+        }.isSuccess
+        Toast.makeText(
+            ctx,
+            if (ok) "$what 已复制" else "复制失败：剪贴板不可用",
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    fun openUrl(url: String) {
+        // 没装浏览器时 startActivity 会抛 ActivityNotFoundException，不能让它冒到主线程
+        runCatching {
+            ctx.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(pal().surface)
+            .border(1.dp, pal().line, RoundedCornerShape(14.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Text(
+            // 已经配好模型的人是从设置进来复习的，再写"推荐从这三家开始"就莫名其妙
+            if (alreadyHasModel) "想换个厂商？这三家可以领额度" else "推荐从这三家开始",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = pal().ink,
+        )
+        RECOMMENDED.forEach { r ->
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(pal().card)
+                    .border(1.dp, pal().lineSoft, RoundedCornerShape(10.dp))
+                    .clickable { openUrl(r.keyUrl) }
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(r.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = pal().ink)
+                    Spacer(Modifier.width(7.dp))
+                    RecommendBadge(r.badge, r.free)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "去获取 ›",
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = pal().accent,
+                    )
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(r.blurb, fontSize = 11.sp, lineHeight = 16.sp, color = pal().muted)
+
+                if (r.inviteCode.isNotBlank()) {
+                    Spacer(Modifier.height(7.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("邀请码", fontSize = 10.5.sp, color = pal().hint)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            r.inviteCode,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = pal().ink,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        // 独立的点击区域：点整行是"打开注册页"，这里只复制邀请码
+                        Text(
+                            "复制",
+                            fontSize = 10.5.sp,
+                            color = pal().accent,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { copyToClipboard(r.inviteCode, "邀请码") }
+                                .padding(horizontal = 5.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        r.host,
+                        fontSize = 10.sp,
+                        color = pal().faint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "复制地址",
+                        fontSize = 10.5.sp,
+                        color = pal().accent,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { copyToClipboard(r.keyUrl, "网址") }
+                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecommendBadge(text: String, free: Boolean) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (free) pal().okSoft else pal().accentSoft)
+            .padding(horizontal = 6.dp, vertical = 1.dp),
+    ) {
+        Text(
+            text,
+            fontSize = 9.5.sp,
+            color = if (free) pal().ok else pal().accentInk,
+        )
     }
 }
